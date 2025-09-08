@@ -280,14 +280,19 @@ export const useDependencyAnalyzer = () => {
         
         dependencies.forEach((node, name) => {
           if (node.loaded && node.devDependencies && Object.keys(node.devDependencies).length > 0) {
-            // Add dev dependencies that haven't been loaded yet
+            // Add dev dependencies that haven't been loaded or queued yet
             Object.entries(node.devDependencies).forEach(([depName, depVersion]) => {
+              // Check if this dependency is already loaded, being processed, or queued
+              const isAlreadyLoaded = dependencies.has(depName);
+              const isAlreadyQueued = pendingDependencies.some(p => p.name === depName);
               const workerId = `${depName}@${depVersion}`;
-              if (!completedDependencies.has(workerId) && !dependencies.has(depName)) {
+              const isCompleted = completedDependencies.has(workerId);
+              
+              if (!isAlreadyLoaded && !isAlreadyQueued && !isCompleted) {
                 packagesToUpdate.push({
                   name: depName,
                   version: depVersion,
-                  level: 1 // Dev deps are at level 1 (will be limited by MAX_DEPENDENCY_LEVELS)
+                  level: 1 // Start dev deps at level 1, they'll be limited by MAX_DEPENDENCY_LEVELS
                 });
               }
             });
@@ -303,7 +308,7 @@ export const useDependencyAnalyzer = () => {
       
       return newValue;
     });
-  }, [dependencies, completedDependencies]);
+  }, [dependencies, completedDependencies, pendingDependencies]);
 
   const reset = useCallback(() => {
     // Terminate all active workers
