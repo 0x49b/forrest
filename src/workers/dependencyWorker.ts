@@ -232,7 +232,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
             version: packageData.version,
             description: packageData.description,
             dependencies: packageData.dependencies || {},
-            devDependencies: includeDevDeps ? (packageData.devDependencies || {}) : {},
+            devDependencies: packageData.devDependencies || {},
             loaded: true,
             loading: false,
             homepage: packageData.homepage,

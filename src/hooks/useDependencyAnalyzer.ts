@@ -262,8 +262,39 @@ export const useDependencyAnalyzer = () => {
   }, []);
 
   const toggleDevDependencies = useCallback(() => {
-    setShowDevDependencies(prev => !prev);
-  }, []);
+    setShowDevDependencies(prev => {
+      const newValue = !prev;
+      
+      // If enabling dev dependencies, load them for all existing packages
+      if (newValue) {
+        const packagesToUpdate: Array<{name: string, version: string, level: number}> = [];
+        
+        dependencies.forEach((node, name) => {
+          if (node.loaded && node.devDependencies && Object.keys(node.devDependencies).length > 0) {
+            // Add dev dependencies that haven't been loaded yet
+            Object.entries(node.devDependencies).forEach(([depName, depVersion]) => {
+              const workerId = `${depName}@${depVersion}`;
+              if (!processedDependencies.has(workerId) && !dependencies.has(depName)) {
+                packagesToUpdate.push({
+                  name: depName,
+                  version: depVersion,
+                  level: 2 // Assume level 2 for dev deps
+                });
+              }
+            });
+          }
+        });
+        
+        if (packagesToUpdate.length > 0) {
+          setLoading(true);
+          setPendingDependencies(prev => [...prev, ...packagesToUpdate]);
+          setTotalDependencies(prev => prev + packagesToUpdate.length);
+        }
+      }
+      
+      return newValue;
+    });
+  }, [dependencies, processedDependencies]);
 
   const reset = useCallback(() => {
     // Terminate all active workers
