@@ -22,3 +22,10 @@ export interface BreadcrumbItem {
   name: string;
   version: string;
 }
+
+export interface LoadingProgress {
+  current: number;
+  total: number;
+  currentPackage?: string;
+  level: number;
+}

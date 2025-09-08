@@ -7,42 +7,64 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
     // Clean version string (remove ^, ~, >=, etc.)
     const cleanVersion = version ? version.replace(/^[\^~>=<]+/, '') : 'latest';
     
-    let url: string;
-    if (cleanVersion === 'latest') {
-      url = `${NPM_REGISTRY_BASE}/${encodeURIComponent(packageName)}/latest`;
-    } else {
-      // Fetch specific version data directly
-      url = `${NPM_REGISTRY_BASE}/${encodeURIComponent(packageName)}/${cleanVersion}`;
-    }
-
-    console.log(`Fetching package data from: ${url}`);
+    console.log(`Fetching package data for: ${packageName}@${cleanVersion}`);
     
-    const response = await fetch(url, {
+    // First, try to get the package metadata
+    const response = await fetch(`${NPM_REGISTRY_BASE}/${encodeURIComponent(packageName)}`, {
       headers: {
         'Accept': 'application/json'
       }
     });
 
     if (!response.ok) {
-      // If specific version fails, try getting all versions and find the best match
-      if (cleanVersion !== 'latest') {
-        console.log(`Direct version fetch failed, trying to get all versions for ${packageName}`);
-        return await fetchFromAllVersions(packageName, cleanVersion);
-      }
-      throw new Error(`Failed to fetch package ${packageName}@${cleanVersion}: ${response.status} ${response.statusText}`);
+      throw new Error(`Failed to fetch package ${packageName}: ${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
     
+    // Get the latest version if no specific version requested
+    let targetVersion = cleanVersion;
+    if (cleanVersion === 'latest') {
+      targetVersion = data['dist-tags']?.latest;
+      if (!targetVersion) {
+        throw new Error(`No latest version found for ${packageName}`);
+      }
+    }
+    
+    // Find the best matching version
+    let versionData = data.versions?.[targetVersion];
+    
+    if (!versionData) {
+      // Try to find a compatible version
+      const availableVersions = Object.keys(data.versions || {});
+      const compatibleVersion = findBestMatch(availableVersions, targetVersion);
+      
+      if (compatibleVersion) {
+        versionData = data.versions[compatibleVersion];
+        console.log(`Using compatible version ${compatibleVersion} for ${packageName}@${targetVersion}`);
+      } else {
+        // Fall back to latest
+        const latestVersion = data['dist-tags']?.latest;
+        if (latestVersion && data.versions[latestVersion]) {
+          versionData = data.versions[latestVersion];
+          console.log(`Falling back to latest version ${latestVersion} for ${packageName}@${targetVersion}`);
+        }
+      }
+    }
+    
+    if (!versionData) {
+      throw new Error(`No compatible version found for ${packageName}@${targetVersion}`);
+    }
+    
     return {
-      name: data.name,
-      version: data.version,
-      description: data.description,
-      dependencies: data.dependencies || {},
-      devDependencies: data.devDependencies || {},
-      homepage: data.homepage,
-      repository: data.repository,
-      license: data.license
+      name: versionData.name,
+      version: versionData.version,
+      description: versionData.description,
+      dependencies: versionData.dependencies || {},
+      devDependencies: versionData.devDependencies || {},
+      homepage: versionData.homepage,
+      repository: versionData.repository,
+      license: versionData.license
     };
   } catch (error) {
     console.error(`Error fetching ${packageName}@${version}:`, error);
@@ -50,66 +72,44 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
   }
 };
 
-const fetchFromAllVersions = async (packageName: string, targetVersion: string): Promise<PackageJson> => {
-  const response = await fetch(`${NPM_REGISTRY_BASE}/${encodeURIComponent(packageName)}`, {
-    headers: {
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch package ${packageName}: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json();
+const findBestMatch = (availableVersions: string[], targetVersion: string): string | null => {
+  // Sort versions in descending order
+  const sortedVersions = availableVersions
+    .filter(v => /^\d+\.\d+\.\d+/.test(v)) // Only consider semantic versions
+    .sort((a, b) => compareVersions(b, a));
   
-  // Try to find the exact version or a compatible one
-  let versionData = data.versions?.[targetVersion];
-  
-  if (!versionData) {
-    // Try to find a compatible version (for ranges like ^18.0.0)
-    const availableVersions = Object.keys(data.versions || {});
-    const compatibleVersion = findCompatibleVersion(availableVersions, targetVersion);
+  // If target is a range (like ^1.0.0), find compatible versions
+  if (targetVersion.includes('.')) {
+    const targetParts = targetVersion.split('.').map(part => parseInt(part.replace(/\D/g, ''), 10));
     
-    if (compatibleVersion) {
-      versionData = data.versions[compatibleVersion];
-    } else {
-      // Fall back to latest
-      const latestVersion = data['dist-tags']?.latest;
-      versionData = latestVersion ? data.versions[latestVersion] : null;
+    for (const version of sortedVersions) {
+      const versionParts = version.split('.').map(part => parseInt(part.replace(/\D/g, ''), 10));
+      
+      // For caret ranges (^1.2.3), allow same major version with higher minor/patch
+      if (versionParts[0] === targetParts[0] && 
+          (versionParts[1] > targetParts[1] || 
+           (versionParts[1] === targetParts[1] && versionParts[2] >= targetParts[2]))) {
+        return version;
+      }
     }
   }
   
-  if (!versionData) {
-    throw new Error(`No compatible version found for ${packageName}@${targetVersion}`);
-  }
-  
-  return {
-    name: versionData.name,
-    version: versionData.version,
-    description: versionData.description,
-    dependencies: versionData.dependencies || {},
-    devDependencies: versionData.devDependencies || {},
-    homepage: versionData.homepage,
-    repository: versionData.repository,
-    license: versionData.license
-  };
+  // If no compatible version found, return the latest
+  return sortedVersions[0] || null;
 };
 
-const findCompatibleVersion = (availableVersions: string[], targetVersion: string): string | null => {
-  // Simple version matching - in a real app you'd use semver library
-  const target = targetVersion.split('.').map(Number);
+const compareVersions = (a: string, b: string): number => {
+  const aParts = a.split('.').map(part => parseInt(part.replace(/\D/g, ''), 10));
+  const bParts = b.split('.').map(part => parseInt(part.replace(/\D/g, ''), 10));
   
-  for (const version of availableVersions.sort().reverse()) {
-    const current = version.split('.').map(Number);
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const aPart = aParts[i] || 0;
+    const bPart = bParts[i] || 0;
     
-    // Check if it's a compatible version (same major version, >= minor.patch)
-    if (current[0] === target[0] && 
-        (current[1] > target[1] || 
-         (current[1] === target[1] && current[2] >= target[2]))) {
-      return version;
+    if (aPart !== bPart) {
+      return aPart - bPart;
     }
   }
   
-  return null;
+  return 0;
 };
