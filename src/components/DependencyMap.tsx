@@ -35,7 +35,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
     const edgeList: GraphEdge[] = [];
     const processedNodes = new Set<string>();
     
-    const processNode = (name: string, level: number, parentX = 0, angle = 0, isDevDep = false) => {
+    const processNode = (name: string, level: number, parentX = 0, parentY = 0, angle = 0, isDevDep = false, siblingIndex = 0, totalSiblings = 1) => {
       if (processedNodes.has(name) || level > 3) return; // Limit depth to prevent infinite recursion
       
       const node = dependencies.get(name);
@@ -43,9 +43,29 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
 
       processedNodes.add(name);
       
-      const radius = Math.max(300, level * 200);
-      const x = level === 0 ? 0 : parentX + Math.cos(angle) * radius;
-      const y = level === 0 ? 0 : Math.sin(angle) * radius;
+      let x, y;
+      
+      if (level === 0) {
+        x = 0;
+        y = 0;
+      } else {
+        // Improved spacing algorithm
+        const baseRadius = Math.max(250, level * 180);
+        const radiusVariation = level * 50; // Add some variation based on sibling position
+        const radius = baseRadius + (siblingIndex % 3) * radiusVariation;
+        
+        // Add some spiral effect to prevent overlapping
+        const spiralOffset = (siblingIndex * 0.3) + (level * 0.2);
+        const adjustedAngle = angle + spiralOffset;
+        
+        x = parentX + Math.cos(adjustedAngle) * radius;
+        y = parentY + Math.sin(adjustedAngle) * radius;
+        
+        // Add some randomization to prevent perfect alignment
+        const jitter = 30;
+        x += (Math.random() - 0.5) * jitter;
+        y += (Math.random() - 0.5) * jitter;
+      }
       
       nodeMap.set(name, {
         id: name,
@@ -67,27 +87,29 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
       const allDeps = [...regularDeps, ...devDeps];
       
       if (allDeps.length > 0) {
-        const angleStep = (Math.PI * 2) / Math.max(allDeps.length, 1);
+        // Improved angle distribution
+        const angleStep = (Math.PI * 1.8) / Math.max(allDeps.length, 1); // Use 1.8 instead of 2 to create gaps
+        const startAngle = angle - (Math.PI * 0.9); // Start from a better position
         
         // Process regular dependencies
         regularDeps.forEach((depName, index) => {
           edgeList.push({ from: name, to: depName, isDevDependency: false });
           
-          const childAngle = angle + (index - allDeps.length / 2) * angleStep * 0.5;
-          processNode(depName, level + 1, x, childAngle, false);
+          const childAngle = startAngle + index * angleStep;
+          processNode(depName, level + 1, x, y, childAngle, false, index, allDeps.length);
         });
         
         // Process dev dependencies
         devDeps.forEach((depName, index) => {
           edgeList.push({ from: name, to: depName, isDevDependency: true });
           
-          const childAngle = angle + ((regularDeps.length + index) - allDeps.length / 2) * angleStep * 0.5;
-          processNode(depName, level + 1, x, childAngle, true);
+          const childAngle = startAngle + (regularDeps.length + index) * angleStep;
+          processNode(depName, level + 1, x, y, childAngle, true, regularDeps.length + index, allDeps.length);
         });
       }
     };
 
-    processNode(rootPackage, 0);
+    processNode(rootPackage, 0, 0, 0, 0, false, 0, 1);
     
     return { nodes: Array.from(nodeMap.values()), edges: edgeList };
   }, [dependencies, rootPackage, showDevDependencies]);
