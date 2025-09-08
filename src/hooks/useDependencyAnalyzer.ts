@@ -3,10 +3,13 @@ import { DependencyNode, PackageJson } from '../types';
 import { fetchPackageJson } from '../services/npmService';
 
 export const useDependencyAnalyzer = () => {
+  const [packageData, setPackageData] = useState<PackageJson | null>(null);
   const [dependencies, setDependencies] = useState<Map<string, DependencyNode>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0, currentPackage: '', level: 0 });
+  const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
+  const [showDevDependencies, setShowDevDependencies] = useState(false);
 
   const updateProgress = useCallback((current: number, total: number, currentPackage: string, level: number) => {
     setProgress({ current, total, currentPackage, level });
@@ -78,6 +81,8 @@ export const useDependencyAnalyzer = () => {
     setLoading(true);
     setError(null);
     setDependencies(new Map());
+    setPackageData(packageJson);
+    setBreadcrumbs([{ name: packageJson.name, version: packageJson.version }]);
     
     try {
       // Add root package directly without fetching from npm
@@ -172,12 +177,46 @@ export const useDependencyAnalyzer = () => {
     }
   }, [dependencies, updateProgress]);
 
+  const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
+    setBreadcrumbs(prev => {
+      const existingIndex = prev.findIndex(item => item.name === packageName);
+      if (existingIndex >= 0) {
+        return prev.slice(0, existingIndex + 1);
+      }
+      return [...prev, { name: packageName, version }];
+    });
+  }, []);
+
+  const navigateToBreadcrumb = useCallback((index: number) => {
+    setBreadcrumbs(prev => prev.slice(0, index + 1));
+  }, []);
+
+  const toggleDevDependencies = useCallback(() => {
+    setShowDevDependencies(prev => !prev);
+  }, []);
+
+  const reset = useCallback(() => {
+    setPackageData(null);
+    setDependencies(new Map());
+    setBreadcrumbs([]);
+    setError(null);
+    setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
+    setShowDevDependencies(false);
+  }, []);
+
   return {
+    packageData,
     dependencies,
     loading,
     error,
     progress,
+    breadcrumbs,
+    showDevDependencies,
     analyzeDependencies,
-    loadDependencies
+    loadPackageDependencies: loadDependencies,
+    navigateToBreadcrumb,
+    addToBreadcrumbs,
+    toggleDevDependencies,
+    reset
   };
 };
