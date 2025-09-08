@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { DependencyNode, PackageJson, BreadcrumbItem, LoadingProgress } from '../types';
+import React from 'react';
 
 export const useDependencyAnalyzer = () => {
   const [packageData, setPackageData] = useState<PackageJson | null>(null);
@@ -113,7 +114,6 @@ export const useDependencyAnalyzer = () => {
     
     setWorkers(prev => new Map(prev).set(workerId, worker));
     return worker;
-  }, [workers, processedDependencies, level]);
   }, [workers, processedDependencies]);
 
   // Process pending dependencies with worker limit
