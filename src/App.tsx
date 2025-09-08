@@ -213,6 +213,7 @@ function App() {
                 <DependencyMap 
                   dependencies={dependencies} 
                   rootPackage={packageData.name}
+                  showDevDependencies={showDevDependencies}
                 />
               )}
             </div>

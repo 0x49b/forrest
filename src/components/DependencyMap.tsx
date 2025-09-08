@@ -4,6 +4,7 @@ import { DependencyNode } from '../types';
 interface DependencyMapProps {
   dependencies: Map<string, DependencyNode>;
   rootPackage: string;
+  showDevDependencies: boolean;
 }
 
 interface GraphNode {
@@ -14,14 +15,16 @@ interface GraphNode {
   y: number;
   level: number;
   isRoot: boolean;
+  isDevDependency: boolean;
 }
 
 interface GraphEdge {
   from: string;
   to: string;
+  isDevDependency: boolean;
 }
 
-export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, rootPackage }) => {
+export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, rootPackage, showDevDependencies }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
@@ -32,7 +35,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
     const edgeList: GraphEdge[] = [];
     const processedNodes = new Set<string>();
     
-    const processNode = (name: string, level: number, parentX = 0, angle = 0) => {
+    const processNode = (name: string, level: number, parentX = 0, angle = 0, isDevDep = false) => {
       if (processedNodes.has(name) || level > 3) return; // Limit depth to prevent infinite recursion
       
       const node = dependencies.get(name);
@@ -51,18 +54,35 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
         x,
         y,
         level,
-        isRoot: level === 0
+        isRoot: level === 0,
+        isDevDependency: isDevDep
       });
 
-      if (node.dependencies) {
-        const deps = Object.keys(node.dependencies);
-        const angleStep = (Math.PI * 2) / Math.max(deps.length, 1);
+      // Collect regular dependencies
+      const regularDeps = Object.keys(node.dependencies || {});
+      
+      // Collect dev dependencies if enabled
+      const devDeps = showDevDependencies ? Object.keys(node.devDependencies || {}) : [];
+      
+      const allDeps = [...regularDeps, ...devDeps];
+      
+      if (allDeps.length > 0) {
+        const angleStep = (Math.PI * 2) / Math.max(allDeps.length, 1);
         
-        deps.forEach((depName, index) => {
-          edgeList.push({ from: name, to: depName });
+        // Process regular dependencies
+        regularDeps.forEach((depName, index) => {
+          edgeList.push({ from: name, to: depName, isDevDependency: false });
           
-          const childAngle = angle + (index - deps.length / 2) * angleStep * 0.5;
-          processNode(depName, level + 1, x, childAngle);
+          const childAngle = angle + (index - allDeps.length / 2) * angleStep * 0.5;
+          processNode(depName, level + 1, x, childAngle, false);
+        });
+        
+        // Process dev dependencies
+        devDeps.forEach((depName, index) => {
+          edgeList.push({ from: name, to: depName, isDevDependency: true });
+          
+          const childAngle = angle + ((regularDeps.length + index) - allDeps.length / 2) * angleStep * 0.5;
+          processNode(depName, level + 1, x, childAngle, true);
         });
       }
     };
@@ -70,7 +90,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
     processNode(rootPackage, 0);
     
     return { nodes: Array.from(nodeMap.values()), edges: edgeList };
-  }, [dependencies, rootPackage]);
+  }, [dependencies, rootPackage, showDevDependencies]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
@@ -131,6 +151,18 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
           <div className="text-xs text-slate-600">
             <div>Zoom: {Math.round(transform.scale * 100)}%</div>
             <div>Nodes: {nodes.length}</div>
+            {showDevDependencies && (
+              <div className="mt-2 pt-2 border-t border-slate-200">
+                <div className="flex items-center gap-1 mb-1">
+                  <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
+                  <span>Regular</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                  <span>Dev Deps</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -155,6 +187,11 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
             {selectedNodeData.dependencies && (
               <div>
                 <span className="text-slate-500">Dependencies:</span> {Object.keys(selectedNodeData.dependencies).length}
+              </div>
+            )}
+            {showDevDependencies && selectedNodeData.devDependencies && Object.keys(selectedNodeData.devDependencies).length > 0 && (
+              <div>
+                <span className="text-slate-500">Dev Dependencies:</span> {Object.keys(selectedNodeData.devDependencies).length}
               </div>
             )}
           </div>
@@ -219,18 +256,37 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
                 cx={node.x}
                 cy={node.y}
                 r={node.isRoot ? 20 : 12}
-                fill={node.isRoot ? '#3b82f6' : selectedNode === node.id ? '#10b981' : '#6366f1'}
+                fill={
+                  node.isRoot 
+                    ? '#3b82f6' 
+                    : selectedNode === node.id 
+                      ? '#10b981' 
+                      : node.isDevDependency 
+                        ? '#f97316' 
+                        : '#6366f1'
+                }
                 stroke="#fff"
                 strokeWidth="2"
                 className="cursor-pointer hover:opacity-80 transition-opacity"
                 onClick={() => handleNodeClick(node.id)}
               />
+              {node.isDevDependency && (
+                <circle
+                  cx={node.x + 8}
+                  cy={node.y - 8}
+                  r="4"
+                  fill="#ea580c"
+                  stroke="#fff"
+                  strokeWidth="1"
+                  className="pointer-events-none"
+                />
+              )}
               <text
                 x={node.x}
                 y={node.y + (node.isRoot ? 35 : 25)}
                 textAnchor="middle"
                 fontSize={node.isRoot ? "14" : "12"}
-                fill="#1e293b"
+                fill={node.isDevDependency ? "#ea580c" : "#1e293b"}
                 className="pointer-events-none font-medium"
               >
                 {node.name}
@@ -241,7 +297,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
                   y={node.y + (node.isRoot ? 50 : 38)}
                   textAnchor="middle"
                   fontSize="10"
-                  fill="#64748b"
+                  fill={node.isDevDependency ? "#c2410c" : "#64748b"}
                   className="pointer-events-none"
                 >
                   v{node.version}
