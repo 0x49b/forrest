@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
-import { DependencyNode, PackageJson } from '../types';
-import { fetchPackageJson } from '../services/npmService';
+import { DependencyNode, PackageJson, BreadcrumbItem, LoadingProgress } from '../types';
 
 export const useDependencyAnalyzer = () => {
   const [packageData, setPackageData] = useState<PackageJson | null>(null);
@@ -11,78 +10,69 @@ export const useDependencyAnalyzer = () => {
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
   const [showDevDependencies, setShowDevDependencies] = useState(false);
 
+  // Web Worker for dependency loading
+  const [worker, setWorker] = useState<Worker | null>(null);
+
+  const initializeWorker = useCallback(() => {
+    if (worker) {
+      worker.terminate();
+    }
+    
+    const newWorker = new Worker(new URL('../workers/dependencyWorker.ts', import.meta.url), {
+      type: 'module'
+    });
+    
+    newWorker.onmessage = (event) => {
+      const { type, payload, id } = event.data;
+      
+      switch (type) {
+        case 'DEPENDENCY_LOADED':
+          setDependencies(prev => new Map(prev).set(payload.name, payload));
+          break;
+          
+        case 'DEPENDENCY_ERROR':
+          console.warn(`Failed to load ${payload.name}@${payload.version}:`, payload.error);
+          
+          const errorNode: DependencyNode = {
+            name: payload.name,
+            version: payload.version,
+            description: `Failed to load: ${payload.error}`,
+            dependencies: {},
+            devDependencies: {},
+            loaded: false,
+            loading: false,
+            hasNoDependencies: true
+          };
+          
+          setDependencies(prev => new Map(prev).set(payload.name, errorNode));
+          break;
+          
+        case 'PROGRESS_UPDATE':
+          setProgress(payload);
+          break;
+          
+        case 'DEPENDENCIES_COMPLETE':
+          setLoading(false);
+          setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
+          break;
+      }
+    };
+    
+    newWorker.onerror = (error) => {
+      console.error('Worker error:', error);
+      setError('Failed to load dependencies');
+      setLoading(false);
+    };
+    
+    setWorker(newWorker);
+    return newWorker;
+  }, [worker]);
+
   const updateProgress = useCallback((current: number, total: number, currentPackage: string, level: number) => {
     setProgress({ current, total, currentPackage, level });
   }, []);
 
-  const preloadDependencies = useCallback(async (
-    packageName: string, 
-    version: string, 
-    currentLevel: number, 
-    maxLevel: number = 5,
-    visited: Set<string> = new Set()
-  ) => {
-    if (currentLevel >= maxLevel) return;
-    
-    const packageKey = `${packageName}@${version}`;
-    if (visited.has(packageKey)) return;
-    visited.add(packageKey);
-
-    try {
-      updateProgress(visited.size, visited.size + 1, packageName, currentLevel);
-      
-      const packageData = await fetchPackageJson(packageName, version);
-      
-      const node: DependencyNode = {
-        name: packageName,
-        version: packageData.version,
-        description: packageData.description,
-        dependencies: packageData.dependencies || {},
-        devDependencies: packageData.devDependencies || {},
-        loaded: true,
-        loading: false,
-        homepage: packageData.homepage,
-        repository: packageData.repository,
-        hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
-      };
-
-      setDependencies(prev => new Map(prev).set(packageName, node));
-
-      // Preload next level dependencies
-      const deps = packageData.dependencies || {};
-      const devDeps = packageData.devDependencies || {};
-      const depEntries = Object.entries(deps);
-      const devDepEntries = Object.entries(devDeps);
-      
-      if (depEntries.length > 0 || devDepEntries.length > 0) {
-        await Promise.all(
-          ...depEntries.map(([depName, depVersion]) =>
-            preloadDependencies(depName, depVersion, currentLevel + 1, maxLevel, visited)
-          ),
-          ...devDepEntries.map(([depName, depVersion]) =>
-            preloadDependencies(depName, depVersion, currentLevel + 1, maxLevel, visited)
-          )
-        );
-      }
-    } catch (error) {
-      console.warn(`Failed to preload ${packageName}@${version}:`, error);
-      
-      const errorNode: DependencyNode = {
-        name: packageName,
-        version: version,
-        description: `Failed to load: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        dependencies: {},
-        devDependencies: {},
-        loaded: false,
-        loading: false,
-        hasNoDependencies: true
-      };
-      
-      setDependencies(prev => new Map(prev).set(packageName, errorNode));
-    }
-  }, [updateProgress]);
-
-  const analyzeDependencies = useCallback(async (packageJson: PackageJson) => {
+  const analyzeDependencies = useCallback((packageJson: PackageJson) => {
     setLoading(true);
     setError(null);
     setDependencies(new Map());
@@ -90,51 +80,51 @@ export const useDependencyAnalyzer = () => {
     setShowDevDependencies(true);
     setBreadcrumbs([{ name: packageJson.name, version: packageJson.version }]);
     
-    try {
-      // Add root package directly without fetching from npm
-      const rootNode: DependencyNode = {
-        name: packageJson.name,
-        version: packageJson.version,
-        description: packageJson.description,
-        dependencies: packageJson.dependencies || {},
-        devDependencies: packageJson.devDependencies || {},
-        loaded: true,
-        loading: false,
-        homepage: packageJson.homepage,
-        repository: packageJson.repository,
-        hasNoDependencies: !packageJson.dependencies || Object.keys(packageJson.dependencies).length === 0
-      };
+    // Add root package directly without fetching from npm
+    const rootNode: DependencyNode = {
+      name: packageJson.name,
+      version: packageJson.version,
+      description: packageJson.description,
+      dependencies: packageJson.dependencies || {},
+      devDependencies: packageJson.devDependencies || {},
+      loaded: true,
+      loading: false,
+      homepage: packageJson.homepage,
+      repository: packageJson.repository,
+      hasNoDependencies: !packageJson.dependencies || Object.keys(packageJson.dependencies).length === 0
+    };
 
-      setDependencies(new Map([[packageJson.name, rootNode]]));
+    setDependencies(new Map([[packageJson.name, rootNode]]));
 
-      // Preload external dependencies starting from level 1
-      const deps = packageJson.dependencies || {};
-      const devDeps = packageJson.devDependencies || {};
-      const depEntries = Object.entries(deps);
-      const devDepEntries = Object.entries(devDeps);
+    // Initialize worker and start loading dependencies
+    const currentWorker = initializeWorker();
+    
+    // Load external dependencies using worker
+    const deps = packageJson.dependencies || {};
+    const devDeps = packageJson.devDependencies || {};
+    const allDeps = { ...deps, ...devDeps };
+    
+    if (Object.keys(allDeps).length > 0) {
+      updateProgress(0, Object.keys(allDeps).length, 'Starting preload...', 1);
       
-      if (depEntries.length > 0 || devDepEntries.length > 0) {
-        updateProgress(0, depEntries.length + devDepEntries.length, 'Starting preload...', 1);
-        
-        await Promise.all(
-          ...depEntries.map(([depName, depVersion]) =>
-            preloadDependencies(depName, depVersion, 1, 5)
-          ),
-          ...devDepEntries.map(([depName, depVersion]) =>
-            preloadDependencies(depName, depVersion, 1, 5)
-          )
-        );
-      }
-      
-      updateProgress(0, 0, '', 0);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to analyze dependencies');
-    } finally {
+      // Send each dependency to worker for loading
+      Object.entries(allDeps).forEach(([depName, depVersion]) => {
+        currentWorker.postMessage({
+          type: 'LOAD_DEPENDENCIES',
+          payload: {
+            packageName: depName,
+            version: depVersion,
+            maxLevel: 5
+          },
+          id: `${depName}@${depVersion}`
+        });
+      });
+    } else {
       setLoading(false);
     }
-  }, [preloadDependencies, updateProgress]);
+  }, [initializeWorker, updateProgress]);
 
-  const loadDependencies = useCallback(async (packageName: string) => {
+  const loadDependencies = useCallback((packageName: string) => {
     const currentNode = dependencies.get(packageName);
     if (!currentNode || currentNode.loaded || currentNode.loading) return;
 
@@ -148,45 +138,18 @@ export const useDependencyAnalyzer = () => {
       return newMap;
     });
 
-    try {
-      updateProgress(1, 1, packageName, 0);
-      
-      const packageData = await fetchPackageJson(packageName, currentNode.version);
-      
-      const updatedNode: DependencyNode = {
-        ...currentNode,
-        dependencies: packageData.dependencies || {},
-        devDependencies: packageData.devDependencies || {},
-        loaded: true,
-        loading: false,
-        description: packageData.description || currentNode.description,
-        homepage: packageData.homepage,
-        repository: packageData.repository,
-        hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
-      };
-
-      setDependencies(prev => new Map(prev).set(packageName, updatedNode));
-      
-      updateProgress(0, 0, '', 0);
-    } catch (error) {
-      setDependencies(prev => {
-        const newMap = new Map(prev);
-        const node = newMap.get(packageName);
-        if (node) {
-          newMap.set(packageName, { 
-            ...node, 
-            loading: false, 
-            loaded: false,
-            description: `Failed to load: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            hasNoDependencies: true
-          });
-        }
-        return newMap;
+    // Use worker to load single dependency
+    if (worker) {
+      worker.postMessage({
+        type: 'LOAD_SINGLE_DEPENDENCY',
+        payload: {
+          packageName,
+          version: currentNode.version
+        },
+        id: `single-${packageName}`
       });
-      
-      updateProgress(0, 0, '', 0);
     }
-  }, [dependencies, updateProgress]);
+  }, [dependencies, worker]);
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
     setBreadcrumbs(prev => {
@@ -207,13 +170,17 @@ export const useDependencyAnalyzer = () => {
   }, []);
 
   const reset = useCallback(() => {
+    if (worker) {
+      worker.terminate();
+      setWorker(null);
+    }
     setPackageData(null);
     setDependencies(new Map());
     setBreadcrumbs([]);
     setError(null);
     setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
     setShowDevDependencies(false);
-  }, []);
+  }, [worker]);
 
   return {
     packageData,
