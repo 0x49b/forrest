@@ -1,297 +1,256 @@
-import { useState, useCallback } from 'react';
-import { DependencyNode, PackageJson, BreadcrumbItem, LoadingProgress } from '../types';
-import { fetchPackageJson } from '../services/npmService';
+import React, { useState, useMemo } from 'react';
+import { ChevronRight, ChevronDown, Package, ExternalLink, Loader2 } from 'lucide-react';
+import { DependencyNode } from '../types';
 
-export const useDependencyAnalyzer = () => {
-  const [packageData, setPackageData] = useState<PackageJson | null>(null);
-  const [dependencies, setDependencies] = useState<Map<string, DependencyNode>>(new Map());
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<LoadingProgress>({ current: 0, total: 0, level: 0 });
-  const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
-  const [showDevDependencies, setShowDevDependencies] = useState(false);
+interface DependencyTreeProps {
+  dependencies: Map<string, DependencyNode>;
+  rootPackage: string;
+  showDevDependencies: boolean;
+  onLoadDependencies: (packageName: string) => void;
+  onPackageClick: (packageName: string, version: string) => void;
+}
 
-  const preloadDependencies = useCallback(async (
-    packageName: string, 
-    version: string, 
-    level: number, 
-    maxLevel: number,
-    processedPackages: Set<string>,
-    dependencyMap: Map<string, DependencyNode>
-  ): Promise<void> => {
-    if (level > maxLevel || processedPackages.has(`${packageName}@${version}`)) {
-      return;
-    }
+interface TreeNodeProps {
+  node: DependencyNode;
+  dependencies: Map<string, DependencyNode>;
+  showDevDependencies: boolean;
+  level: number;
+  expanded: Set<string>;
+  onToggle: (key: string) => void;
+  onLoadDependencies: (packageName: string) => void;
+  onPackageClick: (packageName: string, version: string) => void;
+}
 
-    processedPackages.add(`${packageName}@${version}`);
-    
-    try {
-      setProgress(prev => ({ 
-        ...prev, 
-        currentPackage: packageName,
-        level 
-      }));
-
-      const packageJson = await fetchPackageJson(packageName, version);
-      
-      const node: DependencyNode = {
-        name: packageJson.name,
-        version: packageJson.version,
-        description: packageJson.description,
-        dependencies: packageJson.dependencies,
-        devDependencies: packageJson.devDependencies,
-        homepage: packageJson.homepage,
-        repository: packageJson.repository,
-        license: packageJson.license,
-        loaded: true,
-        loading: false,
-        hasNoDependencies: (!packageJson.dependencies || Object.keys(packageJson.dependencies).length === 0) &&
-                          (!packageJson.devDependencies || Object.keys(packageJson.devDependencies).length === 0)
-      };
-
-      dependencyMap.set(packageName, node);
-      
-      setProgress(prev => ({ 
-        ...prev, 
-        current: prev.current + 1 
-      }));
-
-      // Recursively load dependencies
-      const allDeps = {
-        ...packageJson.dependencies,
-        ...(showDevDependencies ? packageJson.devDependencies : {})
-      };
-
-      if (allDeps && level < maxLevel) {
-        const depPromises = Object.entries(allDeps).map(([depName, depVersion]) =>
-          preloadDependencies(depName, depVersion, level + 1, maxLevel, processedPackages, dependencyMap)
-        );
-        
-        await Promise.all(depPromises);
-      }
-    } catch (err) {
-      console.error(`Failed to preload ${packageName}@${version}:`, err);
-      
-      const errorNode: DependencyNode = {
-        name: packageName,
-        version: version.replace(/[\^~]/, ''),
-        loaded: true,
-        loading: false,
-        description: `Failed to load: ${err instanceof Error ? err.message : 'Unknown error'}`,
-        hasNoDependencies: true
-      };
-      
-      dependencyMap.set(packageName, errorNode);
-      
-      setProgress(prev => ({ 
-        ...prev, 
-        current: prev.current + 1 
-      }));
-    }
-  }, [showDevDependencies]);
-
-  const countTotalDependencies = useCallback((
-    deps: Record<string, string> | undefined,
-    level: number,
-    maxLevel: number,
-    counted: Set<string>
-  ): number => {
-    if (!deps || level > maxLevel) return 0;
-    
-    let count = 0;
-    for (const [name, version] of Object.entries(deps)) {
-      const key = `${name}@${version}`;
-      if (!counted.has(key)) {
-        counted.add(key);
-        count += 1;
-      }
-    }
-    return count;
-  }, []);
-
-  const analyzeDependencies = useCallback(async (rootPackage: PackageJson) => {
-    setLoading(true);
-    setError(null);
-    setPackageData(rootPackage);
-    setBreadcrumbs([{ name: rootPackage.name, version: rootPackage.version }]);
-
-    const dependencyMap = new Map<string, DependencyNode>();
-    const processedPackages = new Set<string>();
-    const countedPackages = new Set<string>();
-
-    // Count total dependencies to preload (approximate)
-    const allRootDeps = {
-      ...rootPackage.dependencies,
-      ...(showDevDependencies ? rootPackage.devDependencies : {})
-    };
-    
-    let totalEstimate = 1; // Root package
-    if (allRootDeps) {
-      totalEstimate += Object.keys(allRootDeps).length * 5; // Rough estimate
-    }
-
-    setProgress({ current: 0, total: totalEstimate, level: 0 });
-
-    try {
-      // Start preloading from root package
-      await preloadDependencies(
-        rootPackage.name, 
-        rootPackage.version, 
-        0, 
-        5, // 5 levels deep
-        processedPackages,
-        dependencyMap
-      );
-
-      setDependencies(new Map(dependencyMap));
-    } catch (err) {
-      setError(`Failed to analyze dependencies: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setLoading(false);
-      setProgress({ current: 0, total: 0, level: 0 });
-    }
-  }, [preloadDependencies, showDevDependencies]);
-
-  const loadPackageDependencies = useCallback(async (packageName: string) => {
-    // Don't load if already loaded or loading
-    const existingNode = dependencies.get(packageName);
-    if (existingNode?.loaded || existingNode?.loading) {
-      return;
-    }
-
-    // Find the version from the parent's dependencies
-    let targetVersion: string | undefined;
-    for (const [, node] of dependencies) {
-      if (node.dependencies?.[packageName]) {
-        targetVersion = node.dependencies[packageName];
-        break;
-      }
-      if (showDevDependencies && node.devDependencies?.[packageName]) {
-        targetVersion = node.devDependencies[packageName];
-        break;
-      }
-    }
-
-    setDependencies(prev => {
-      const updated = new Map(prev);
-      const node = updated.get(packageName);
-      if (node) {
-        updated.set(packageName, { ...node, loading: true });
-      } else {
-        updated.set(packageName, {
-          name: packageName,
-          version: targetVersion?.replace(/^[\^~>=<]+/, '') || 'unknown',
-          loading: true,
-          loaded: false
-        });
-      }
-      return updated;
-    });
-
-    try {
-      const packageJson = await fetchPackageJson(packageName, targetVersion);
-      
-      setDependencies(prev => {
-        const updated = new Map(prev);
-        
-        const node: DependencyNode = {
-          name: packageJson.name,
-          version: packageJson.version,
-          description: packageJson.description,
-          dependencies: packageJson.dependencies,
-          devDependencies: packageJson.devDependencies,
-          homepage: packageJson.homepage,
-          repository: packageJson.repository,
-          license: packageJson.license,
-          loaded: true,
-          loading: false,
-          hasNoDependencies: (!packageJson.dependencies || Object.keys(packageJson.dependencies).length === 0) &&
-                            (!packageJson.devDependencies || Object.keys(packageJson.devDependencies).length === 0)
-        };
-        
-        updated.set(packageName, node);
-        
-        // Add placeholder nodes for dependencies
-        const allDeps = {
-          ...packageJson.dependencies,
-          ...(showDevDependencies ? packageJson.devDependencies : {})
-        };
-        
-        if (allDeps) {
-          Object.entries(allDeps).forEach(([depName, version]) => {
-            if (!updated.has(depName)) {
-              updated.set(depName, {
-                name: depName,
-                version: version.replace(/[\^~]/, ''),
-                loaded: false,
-                loading: false
-              });
-            }
-          });
-        }
-        
-        return updated;
-      });
-    } catch (err) {
-      console.error(`Failed to fetch ${packageName}:`, err);
-      setDependencies(prev => {
-        const updated = new Map(prev);
-        const node = updated.get(packageName);
-        if (node) {
-          updated.set(packageName, {
-            ...node,
-            loaded: true,
-            loading: false,
-            description: `Failed to load: ${err instanceof Error ? err.message : 'Unknown error'}`,
-            hasNoDependencies: true
-          });
-        }
-        return updated;
-      });
-    }
-  }, [dependencies, showDevDependencies]);
-
-  const navigateToBreadcrumb = useCallback((index: number) => {
-    setBreadcrumbs(prev => prev.slice(0, index + 1));
-  }, []);
-
-  const addToBreadcrumbs = useCallback((name: string, version: string) => {
-    setBreadcrumbs(prev => {
-      const existingIndex = prev.findIndex(item => item.name === name);
-      if (existingIndex !== -1) {
-        return prev.slice(0, existingIndex + 1);
-      }
-      return [...prev, { name, version }];
-    });
-  }, []);
-
-  const toggleDevDependencies = useCallback(() => {
-    setShowDevDependencies(prev => !prev);
-  }, []);
-
-  const reset = useCallback(() => {
-    setPackageData(null);
-    setDependencies(new Map());
-    setLoading(false);
-    setError(null);
-    setProgress({ current: 0, total: 0, level: 0 });
-    setBreadcrumbs([]);
-    setShowDevDependencies(false);
-  }, []);
-
-  return {
-    packageData,
-    dependencies,
-    loading,
-    error,
-    progress,
-    breadcrumbs,
-    showDevDependencies,
-    analyzeDependencies,
-    loadPackageDependencies,
-    navigateToBreadcrumb,
-    addToBreadcrumbs,
-    toggleDevDependencies,
-    reset
+const TreeNode: React.FC<TreeNodeProps> = ({ 
+  node, 
+  dependencies, 
+  showDevDependencies,
+  level, 
+  expanded, 
+  onToggle, 
+  onLoadDependencies, 
+  onPackageClick 
+}) => {
+  const allDeps = {
+    ...node.dependencies,
+    ...(showDevDependencies ? node.devDependencies : {})
   };
+  const hasChildren = allDeps && Object.keys(allDeps).length > 0;
+  const canLoadDependencies = !node.loaded && !node.loading;
+  const isExpanded = expanded.has(node.name);
+  const indent = level * 24;
+
+  const handleToggle = () => {
+    if (hasChildren || canLoadDependencies) {
+      if (canLoadDependencies) {
+        onLoadDependencies(node.name);
+      }
+      onToggle(node.name);
+    }
+  };
+
+  const handlePackageClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Load dependencies if not loaded
+    if (!node.loaded && !node.loading) {
+      onLoadDependencies(node.name);
+    }
+    onPackageClick(node.name, node.version);
+  };
+
+  const handleExternalClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (node.homepage || node.repository?.url) {
+      const url = node.homepage || node.repository?.url;
+      if (url) {
+        window.open(url.replace('git+', '').replace('.git', ''), '_blank');
+      }
+    } else {
+      window.open(`https://www.npmjs.com/package/${node.name}`, '_blank');
+    }
+  };
+
+  return (
+    <div className="select-none">
+      <div 
+        className={`flex items-center py-2 px-4 hover:bg-slate-50 transition-colors group ${
+          level === 0 ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+        } ${hasChildren || canLoadDependencies ? 'cursor-pointer' : 'cursor-default'}`}
+        style={{ paddingLeft: `${16 + indent}px` }}
+        onClick={handleToggle}
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {node.loading ? (
+            <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
+          ) : hasChildren || canLoadDependencies ? (
+            isExpanded ? (
+              <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
+            )
+          ) : (
+            <div className="w-4 h-4 flex-shrink-0" />
+          )}
+          
+          <Package className="w-4 h-4 text-slate-600 flex-shrink-0" />
+          
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePackageClick}
+                className="font-medium text-slate-900 hover:text-blue-600 truncate transition-colors text-left"
+              >
+                {node.name}
+              </button>
+              <span className="text-xs text-slate-500 flex-shrink-0">v{node.version}</span>
+              <button
+                onClick={handleExternalClick}
+                className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-slate-400 hover:text-blue-600 transition-all"
+                title="View on npm"
+              >
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            </div>
+            {node.description && (
+              <p className="text-xs text-slate-600 truncate mt-1">{node.description}</p>
+            )}
+            {node.hasNoDependencies && (
+              <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
+            )}
+          </div>
+        </div>
+        
+        {hasChildren && !node.loading && (
+          <span className="text-xs text-slate-500 ml-2">
+            {Object.keys(node.dependencies!).length} deps
+          </span>
+        )}
+        {canLoadDependencies && (
+          <span className="text-xs text-blue-600 ml-2">Click to load</span>
+        )}
+      </div>
+
+      {hasChildren && isExpanded && (
+        <div className="border-l border-slate-200 ml-4">
+          {Object.entries(allDeps!).map(([name, version]) => {
+            const childNode = dependencies.get(name);
+            const isDevDep = showDevDependencies && node.devDependencies?.[name];
+            
+            if (childNode) {
+              return (
+                <div key={`${name}-${level}`} className={isDevDep ? 'opacity-75' : ''}>
+                  {isDevDep && (
+                    <div className="text-xs text-orange-600 px-4 py-1" style={{ paddingLeft: `${40 + indent}px` }}>
+                      dev dependency
+                    </div>
+                  )}
+                  <TreeNode
+                    node={childNode}
+                    dependencies={dependencies}
+                    showDevDependencies={showDevDependencies}
+                    level={level + 1}
+                    expanded={expanded}
+                    onToggle={onToggle}
+                    onLoadDependencies={onLoadDependencies}
+                    onPackageClick={onPackageClick}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div
+                key={`${name}-${level}-loading`}
+                className="flex items-center py-2 px-4 text-slate-500"
+                style={{ paddingLeft: `${40 + indent}px` }}
+              >
+                <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
+                <span className="text-sm">
+                  {name}@{version}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const DependencyTree: React.FC<DependencyTreeProps> = ({ 
+  dependencies, 
+  rootPackage, 
+  onLoadDependencies, 
+  onPackageClick 
+}) => {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set([rootPackage]));
+
+  const rootNode = useMemo(() => {
+    return dependencies.get(rootPackage);
+  }, [dependencies, rootPackage]);
+
+  const handleToggle = (key: string) => {
+    setExpanded(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(key)) {
+        newSet.delete(key);
+      } else {
+        newSet.add(key);
+      }
+      return newSet;
+    });
+  };
+
+  const handleExpandAll = () => {
+    setExpanded(new Set(Array.from(dependencies.keys())));
+  };
+
+  const handleCollapseAll = () => {
+    setExpanded(new Set([rootPackage]));
+  };
+
+  if (!rootNode) {
+    return (
+      <div className="p-8 text-center">
+        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-slate-600">Loading dependency tree...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-[600px] flex flex-col">
+      {/* Controls */}
+      <div className="flex items-center justify-between p-4 border-b border-slate-200">
+        <h3 className="text-lg font-medium text-slate-900">Dependency Tree</h3>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExpandAll}
+            className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+          >
+            Expand All
+          </button>
+          <button
+            onClick={handleCollapseAll}
+            className="px-3 py-1 text-sm text-slate-600 hover:bg-slate-50 rounded transition-colors"
+          >
+            Collapse All
+          </button>
+        </div>
+      </div>
+
+      {/* Tree */}
+      <div className="flex-1 overflow-auto">
+        <div className="group">
+          <TreeNode
+            node={rootNode}
+            dependencies={dependencies}
+            level={0}
+            expanded={expanded}
+            onToggle={handleToggle}
+            onLoadDependencies={onLoadDependencies}
+            onPackageClick={onPackageClick}
+          />
+        </div>
+      </div>
+    </div>
+  );
 };
