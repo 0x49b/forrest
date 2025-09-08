@@ -114,6 +114,7 @@ export const useDependencyAnalyzer = () => {
     setWorkers(prev => new Map(prev).set(workerId, worker));
     return worker;
   }, [workers, processedDependencies, level]);
+  }, [workers, processedDependencies]);
 
   // Process pending dependencies with worker limit
   const processPendingDependencies = useCallback(() => {
