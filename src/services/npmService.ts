@@ -4,6 +4,48 @@ const NPM_REGISTRY_BASE = 'https://registry.npmjs.org';
 
 export const fetchPackageJson = async (packageName: string, version?: string): Promise<PackageJson> => {
   try {
+    // Handle npm: aliases (e.g., "jiti-v2.1@npm:jiti@2.1.x")
+    if (packageName.includes('@npm:')) {
+      const parts = packageName.split('@npm:');
+      if (parts.length === 2) {
+        const actualPackage = parts[1];
+        const [actualName, actualVersion] = actualPackage.includes('@') 
+          ? actualPackage.split('@')
+          : [actualPackage, version];
+        return fetchPackageJson(actualName, actualVersion);
+      }
+    }
+    
+    // Handle version strings that contain npm: prefix (e.g., "npm:jiti@2.1.x")
+    if (version && version.startsWith('npm:')) {
+      const npmPart = version.substring(4); // Remove "npm:" prefix
+      const [actualName, actualVersion] = npmPart.includes('@')
+        ? npmPart.split('@')
+        : [npmPart, 'latest'];
+      return fetchPackageJson(actualName, actualVersion);
+    }
+    
+    // Handle file:, git+, http://, https:// dependencies - return placeholder
+    if (version && (
+      version.startsWith('file:') ||
+      version.startsWith('git+') ||
+      version.startsWith('http://') ||
+      version.startsWith('https://') ||
+      version.startsWith('link:') ||
+      version.startsWith('workspace:')
+    )) {
+      return {
+        name: packageName,
+        version: version,
+        description: `Local or external dependency (${version})`,
+        dependencies: {},
+        devDependencies: {},
+        homepage: undefined,
+        repository: undefined,
+        license: 'Unknown'
+      };
+    }
+    
     // Clean version string (remove ^, ~, >=, etc.)
     const cleanVersion = version ? version.replace(/^[\^~>=<\s]+/, '') : 'latest';
     
