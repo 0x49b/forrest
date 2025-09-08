@@ -174,18 +174,20 @@ function App() {
               {packageData.description && (
                 <p className="text-slate-700 mb-4">{packageData.description}</p>
               )}
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <span className="text-slate-500">Dependencies:</span>
-                  <span className="ml-2 font-medium">{Object.keys(packageData.dependencies || {}).length}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Dev Dependencies:</span>
-                  <span className="ml-2 font-medium">{Object.keys(packageData.devDependencies || {}).length}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Total Analyzed:</span>
-                  <span className="ml-2 font-medium">{dependencies.size}</span>
+              <div className="flex items-center justify-between">
+                <div className="flex gap-6 text-sm">
+                  <div>
+                    <span className="text-slate-500">Dependencies:</span>
+                    <span className="ml-2 font-medium">{Object.keys(packageData.dependencies || {}).length}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Dev Dependencies:</span>
+                    <span className="ml-2 font-medium">{Object.keys(packageData.devDependencies || {}).length}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Total Analyzed:</span>
+                    <span className="ml-2 font-medium">{dependencies.size}</span>
+                  </div>
                 </div>
               </div>
             </div>
