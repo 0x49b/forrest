@@ -82,6 +82,7 @@ export const useDependencyAnalyzer = () => {
     setError(null);
     setDependencies(new Map());
     setPackageData(packageJson);
+    setShowDevDependencies(true);
     setBreadcrumbs([{ name: packageJson.name, version: packageJson.version }]);
     
     try {
