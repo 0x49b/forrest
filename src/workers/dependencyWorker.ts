@@ -214,98 +214,11 @@ const compareVersions = (a: string, b: string): number => {
   return 0;
 };
 
-const loadDependenciesRecursively = async (
-  packageName: string,
-  version: string,
-  currentLevel: number,
-  maxLevel: number,
-  visited: Set<string>,
-  messageId: string
-) => {
-  if (currentLevel >= maxLevel) return;
-  
-  const packageKey = `${packageName}@${version}`;
-  if (visited.has(packageKey)) return;
-  visited.add(packageKey);
-
-  try {
-    // Send progress update
-    self.postMessage({
-      type: 'PROGRESS_UPDATE',
-      payload: {
-        current: visited.size,
-        total: visited.size + 1,
-        currentPackage: packageName,
-        level: currentLevel
-      },
-      id: messageId
-    });
-
-    const packageData = await fetchPackageJson(packageName, version);
-    
-    // Send the loaded dependency
-    self.postMessage({
-      type: 'DEPENDENCY_LOADED',
-      payload: {
-        name: packageName,
-        version: packageData.version,
-        description: packageData.description,
-        dependencies: packageData.dependencies || {},
-        devDependencies: packageData.devDependencies || {},
-        loaded: true,
-        loading: false,
-        homepage: packageData.homepage,
-        repository: packageData.repository,
-        hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
-      },
-      id: messageId
-    });
-
-    // Load next level dependencies
-    const deps = packageData.dependencies || {};
-    const devDeps = packageData.devDependencies || {};
-    
-    const loadPromises = [
-      ...Object.entries(deps).map(([depName, depVersion]) =>
-        loadDependenciesRecursively(depName, depVersion, currentLevel + 1, maxLevel, visited, messageId)
-      ),
-      ...Object.entries(devDeps).map(([depName, depVersion]) =>
-        loadDependenciesRecursively(depName, depVersion, currentLevel + 1, maxLevel, visited, messageId)
-      )
-    ];
-
-    await Promise.all(loadPromises);
-  } catch (error) {
-    // Send error for this specific dependency
-    self.postMessage({
-      type: 'DEPENDENCY_ERROR',
-      payload: {
-        name: packageName,
-        version: version,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      },
-      id: messageId
-    });
-  }
-};
-
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const { type, payload, id } = event.data;
 
   try {
-    if (type === 'LOAD_DEPENDENCIES') {
-      const { packageName, version, maxLevel = 5 } = payload;
-      const visited = new Set<string>();
-      
-      await loadDependenciesRecursively(packageName, version, 1, maxLevel, visited, id);
-      
-      // Send completion message
-      self.postMessage({
-        type: 'DEPENDENCIES_COMPLETE',
-        payload: { packageName, version },
-        id
-      });
-    } else if (type === 'LOAD_SINGLE_DEPENDENCY') {
+    if (type === 'LOAD_SINGLE_DEPENDENCY') {
       const { packageName, version } = payload;
       
       try {
