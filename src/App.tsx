@@ -7,6 +7,31 @@ import { ProgressBar } from './components/ProgressBar';
 import { useDependencyAnalyzer } from './hooks/useDependencyAnalyzer';
 import { Package, TreePine, Map, Settings } from 'lucide-react';
 
+// Helper function to check if a node has a path through regular dependencies
+const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, DependencyNode>, rootName: string): boolean => {
+  const visited = new Set<string>();
+  
+  const dfs = (currentName: string): boolean => {
+    if (visited.has(currentName)) return false;
+    visited.add(currentName);
+    
+    const node = dependencies.get(currentName);
+    if (!node) return false;
+    
+    // Check if target is in regular dependencies
+    if (node.dependencies?.[targetName]) return true;
+    
+    // Recursively check regular dependencies
+    for (const depName of Object.keys(node.dependencies || {})) {
+      if (dfs(depName)) return true;
+    }
+    
+    return false;
+  };
+  
+  return dfs(rootName);
+};
+
 function App() {
   const [view, setView] = useState<'tree' | 'map'>('tree');
   const [initialShowDevDependencies, setInitialShowDevDependencies] = useState(true);
@@ -186,7 +211,18 @@ function App() {
                   </div>
                   <div>
                     <span className="text-slate-500">Total Analyzed:</span>
-                    <span className="ml-2 font-medium">{dependencies.size}</span>
+                    <span className="ml-2 font-medium">
+                      {Array.from(dependencies.values()).filter(node => {
+                        if (!showDevDependencies) {
+                          // Only count nodes that are not dev-only dependencies
+                          const rootNode = dependencies.get(packageData.name);
+                          const isInRegularDeps = rootNode?.dependencies?.[node.name];
+                          const isRoot = node.name === packageData.name;
+                          return isRoot || isInRegularDeps || hasRegularDependencyPath(node.name, dependencies, packageData.name);
+                        }
+                        return true;
+                      }).length}
+                    </span>
                   </div>
                 </div>
               </div>

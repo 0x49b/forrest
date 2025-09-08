@@ -172,7 +172,12 @@ export const useDependencyAnalyzer = () => {
   // Update progress based on processed dependencies
   React.useEffect(() => {
     const current = completedDependencies.size;
-    const total = totalDependenciesToLoad;
+    // Filter total based on showDevDependencies setting
+    const total = showDevDependencies ? totalDependenciesToLoad : 
+      Array.from(allDiscoveredDependencies).filter(depName => {
+        // Only count if it's reachable through regular dependencies
+        return hasRegularDependencyPathInProgress(depName);
+      }).length;
     
     if (total > 0) {
       const currentLevel = pendingDependencies.length > 0 
@@ -194,6 +199,27 @@ export const useDependencyAnalyzer = () => {
     }
   }, [completedDependencies.size, totalDependenciesToLoad, pendingDependencies.length, activeWorkers, pendingDependencies, MAX_DEPENDENCY_LEVELS]);
 
+  // Helper function for progress calculation
+  const hasRegularDependencyPathInProgress = (targetName: string): boolean => {
+    const visited = new Set<string>();
+    
+    const dfs = (currentName: string): boolean => {
+      if (visited.has(currentName)) return false;
+      visited.add(currentName);
+      
+      const node = dependencies.get(currentName);
+      if (!node || !packageData) return false;
+      
+      if (node.dependencies?.[targetName]) return true;
+      
+      for (const depName of Object.keys(node.dependencies || {})) {
+        if (dfs(depName)) return true;
+      }
+      return false;
+    };
+    
+    return packageData ? dfs(packageData.name) : false;
+  };
   // Process pending dependencies when slots become available
   React.useEffect(() => {
     processPendingDependencies();
