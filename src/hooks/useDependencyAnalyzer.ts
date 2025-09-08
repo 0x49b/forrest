@@ -50,11 +50,16 @@ export const useDependencyAnalyzer = () => {
 
       // Preload next level dependencies
       const deps = packageData.dependencies || {};
+      const devDeps = packageData.devDependencies || {};
       const depEntries = Object.entries(deps);
+      const devDepEntries = Object.entries(devDeps);
       
-      if (depEntries.length > 0) {
+      if (depEntries.length > 0 || devDepEntries.length > 0) {
         await Promise.all(
-          depEntries.map(([depName, depVersion]) =>
+          ...depEntries.map(([depName, depVersion]) =>
+            preloadDependencies(depName, depVersion, currentLevel + 1, maxLevel, visited)
+          ),
+          ...devDepEntries.map(([depName, depVersion]) =>
             preloadDependencies(depName, depVersion, currentLevel + 1, maxLevel, visited)
           )
         );
@@ -104,13 +109,18 @@ export const useDependencyAnalyzer = () => {
 
       // Preload external dependencies starting from level 1
       const deps = packageJson.dependencies || {};
+      const devDeps = packageJson.devDependencies || {};
       const depEntries = Object.entries(deps);
+      const devDepEntries = Object.entries(devDeps);
       
-      if (depEntries.length > 0) {
-        updateProgress(0, depEntries.length, 'Starting preload...', 1);
+      if (depEntries.length > 0 || devDepEntries.length > 0) {
+        updateProgress(0, depEntries.length + devDepEntries.length, 'Starting preload...', 1);
         
         await Promise.all(
-          depEntries.map(([depName, depVersion]) =>
+          ...depEntries.map(([depName, depVersion]) =>
+            preloadDependencies(depName, depVersion, 1, 5)
+          ),
+          ...devDepEntries.map(([depName, depVersion]) =>
             preloadDependencies(depName, depVersion, 1, 5)
           )
         );
