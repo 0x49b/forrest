@@ -15,8 +15,8 @@ export const useDependencyAnalyzer = () => {
   const [workers, setWorkers] = useState<Map<string, Worker>>(new Map());
   const [activeWorkers, setActiveWorkers] = useState(0);
   const [pendingDependencies, setPendingDependencies] = useState<Array<{name: string, version: string, level: number}>>([]);
-  const [processedDependencies, setProcessedDependencies] = useState<Set<string>>(new Set());
-  const [totalDependencies, setTotalDependencies] = useState(0);
+  const [completedDependencies, setCompletedDependencies] = useState<Set<string>>(new Set());
+  const [totalDependenciesToLoad, setTotalDependenciesToLoad] = useState(0);
   
   const MAX_WORKERS = 30;
   const MAX_DEPENDENCY_LEVELS = 2; // Configure max depth here - change this to adjust levels
@@ -48,16 +48,16 @@ export const useDependencyAnalyzer = () => {
             
             const newDeps = childDeps
               .map(([name, version]) => ({ name, version, level: level + 1 }))
-              .filter(dep => !processedDependencies.has(`${dep.name}@${dep.version}`));
+              .filter(dep => !completedDependencies.has(`${dep.name}@${dep.version}`) && !pendingDependencies.some(p => p.name === dep.name));
             
             if (newDeps.length > 0) {
               setPendingDependencies(prev => [...prev, ...newDeps]);
-              setTotalDependencies(prev => prev + newDeps.length);
+              setTotalDependenciesToLoad(prev => prev + newDeps.length);
             }
           }
           
-          // Mark as processed and clean up worker
-          setProcessedDependencies(prev => new Set(prev).add(workerId));
+          // Mark as completed and clean up worker
+          setCompletedDependencies(prev => new Set(prev).add(workerId));
           
           // Clean up worker
           worker.terminate();
@@ -86,8 +86,8 @@ export const useDependencyAnalyzer = () => {
           
           setDependencies(prev => new Map(prev).set(payload.name, errorNode));
           
-          // Mark as processed and clean up worker
-          setProcessedDependencies(prev => new Set(prev).add(workerId));
+          // Mark as completed and clean up worker
+          setCompletedDependencies(prev => new Set(prev).add(workerId));
           
           // Clean up worker
           worker.terminate();
@@ -117,7 +117,7 @@ export const useDependencyAnalyzer = () => {
     
     setWorkers(prev => new Map(prev).set(workerId, worker));
     return worker;
-  }, [workers, processedDependencies]);
+  }, [workers, completedDependencies, pendingDependencies]);
 
   // Process pending dependencies with worker limit
   const processPendingDependencies = useCallback(() => {
@@ -133,7 +133,7 @@ export const useDependencyAnalyzer = () => {
     toProcess.forEach(({ name, version, level }) => {
       const workerId = `${name}@${version}`;
       
-      if (processedDependencies.has(workerId)) {
+      if (completedDependencies.has(workerId)) {
         return;
       }
       
@@ -146,28 +146,32 @@ export const useDependencyAnalyzer = () => {
         id: workerId
       });
     });
-  }, [activeWorkers, pendingDependencies, processedDependencies, createWorker, showDevDependencies]);
+  }, [activeWorkers, pendingDependencies, completedDependencies, createWorker, showDevDependencies]);
 
   // Update progress based on processed dependencies
   React.useEffect(() => {
-    const current = processedDependencies.size;
-    const total = totalDependencies;
+    const current = completedDependencies.size;
+    const total = totalDependenciesToLoad;
     
     if (total > 0) {
+      const currentLevel = pendingDependencies.length > 0 
+        ? Math.min(...pendingDependencies.map(d => d.level)) 
+        : MAX_DEPENDENCY_LEVELS;
+        
       setProgress({
         current,
         total,
         currentPackage: pendingDependencies[0]?.name || '',
-        level: pendingDependencies.length > 0 ? Math.min(...pendingDependencies.map(d => d.level)) : MAX_DEPENDENCY_LEVELS
+        level: currentLevel
       });
     }
     
     // Check if loading is complete
-    if (totalDependencies > 0 && pendingDependencies.length === 0 && activeWorkers === 0) {
+    if (totalDependenciesToLoad > 0 && pendingDependencies.length === 0 && activeWorkers === 0) {
       setLoading(false);
       setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
     }
-  }, [processedDependencies.size, totalDependencies, pendingDependencies.length, activeWorkers, pendingDependencies]);
+  }, [completedDependencies.size, totalDependenciesToLoad, pendingDependencies.length, activeWorkers, pendingDependencies, MAX_DEPENDENCY_LEVELS]);
 
   // Process pending dependencies when slots become available
   React.useEffect(() => {
@@ -185,8 +189,8 @@ export const useDependencyAnalyzer = () => {
     setWorkers(new Map());
     setActiveWorkers(0);
     setPendingDependencies([]);
-    setProcessedDependencies(new Set());
-    setTotalDependencies(0);
+    setCompletedDependencies(new Set());
+    setTotalDependenciesToLoad(0);
     setPackageData(packageJson);
     setShowDevDependencies(includeDevDeps);
     setBreadcrumbs([{ name: packageJson.name, version: packageJson.version }]);
@@ -220,7 +224,7 @@ export const useDependencyAnalyzer = () => {
       }));
       
       setPendingDependencies(initialDeps);
-      setTotalDependencies(initialDeps.length);
+      setTotalDependenciesToLoad(initialDeps.length);
     } else {
       setLoading(false);
     }
@@ -242,15 +246,15 @@ export const useDependencyAnalyzer = () => {
 
     // Add to pending dependencies if not already processed
     const workerId = `${packageName}@${currentNode.version}`;
-    if (!processedDependencies.has(workerId)) {
+    if (!completedDependencies.has(workerId)) {
       setPendingDependencies(prev => [...prev, {
         name: packageName,
         version: currentNode.version,
         level: 1
       }]);
-      setTotalDependencies(prev => prev + 1);
+      setTotalDependenciesToLoad(prev => prev + 1);
     }
-  }, [dependencies, processedDependencies]);
+  }, [dependencies, completedDependencies]);
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
     setBreadcrumbs(prev => {
@@ -279,7 +283,7 @@ export const useDependencyAnalyzer = () => {
             // Add dev dependencies that haven't been loaded yet
             Object.entries(node.devDependencies).forEach(([depName, depVersion]) => {
               const workerId = `${depName}@${depVersion}`;
-              if (!processedDependencies.has(workerId) && !dependencies.has(depName)) {
+              if (!completedDependencies.has(workerId) && !dependencies.has(depName)) {
                 packagesToUpdate.push({
                   name: depName,
                   version: depVersion,
@@ -293,13 +297,13 @@ export const useDependencyAnalyzer = () => {
         if (packagesToUpdate.length > 0) {
           setLoading(true);
           setPendingDependencies(prev => [...prev, ...packagesToUpdate]);
-          setTotalDependencies(prev => prev + packagesToUpdate.length);
+          setTotalDependenciesToLoad(prev => prev + packagesToUpdate.length);
         }
       }
       
       return newValue;
     });
-  }, [dependencies, processedDependencies]);
+  }, [dependencies, completedDependencies]);
 
   const reset = useCallback(() => {
     // Terminate all active workers
@@ -307,8 +311,8 @@ export const useDependencyAnalyzer = () => {
     setWorkers(new Map());
     setActiveWorkers(0);
     setPendingDependencies([]);
-    setProcessedDependencies(new Set());
-    setTotalDependencies(0);
+    setCompletedDependencies(new Set());
+    setTotalDependenciesToLoad(0);
     setPackageData(null);
     setDependencies(new Map());
     setBreadcrumbs([]);
