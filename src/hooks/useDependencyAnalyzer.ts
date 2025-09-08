@@ -173,9 +173,6 @@ export const useDependencyAnalyzer = () => {
     setProgress({ current, total, currentPackage, level });
   }, []);
 
-  const analyzeDependencies = useCallback((packageJson: PackageJson) => {
-  }
-  )
   const analyzeDependencies = useCallback((packageJson: PackageJson, includeDevDeps: boolean = true) => {
     setLoading(true);
     setError(null);
