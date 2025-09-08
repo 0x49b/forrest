@@ -3,8 +3,9 @@ import { PackageJsonInput } from './components/PackageJsonInput';
 import { DependencyTree } from './components/DependencyTree';
 import { DependencyMap } from './components/DependencyMap';
 import { Breadcrumbs } from './components/Breadcrumbs';
+import { ProgressBar } from './components/ProgressBar';
 import { useDependencyAnalyzer } from './hooks/useDependencyAnalyzer';
-import { Package, View as TreeView } from 'lucide-react';
+import { Package, TreePine, Map, Settings } from 'lucide-react';
 
 function App() {
   const [view, setView] = useState<'tree' | 'map'>('tree');
@@ -15,10 +16,12 @@ function App() {
     error, 
     progress,
     breadcrumbs,
+    showDevDependencies,
     analyzeDependencies,
     loadPackageDependencies,
     navigateToBreadcrumb,
     addToBreadcrumbs,
+    toggleDevDependencies,
     reset 
   } = useDependencyAnalyzer();
 
@@ -33,9 +36,13 @@ function App() {
 
   const handlePackageClick = useCallback((packageName: string, version: string) => {
     addToBreadcrumbs(packageName, version);
-  }, [addToBreadcrumbs, loadPackageDependencies, dependencies]);
+  }, [addToBreadcrumbs]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Progress Bar */}
+      <ProgressBar progress={progress} loading={loading} />
+
       {/* Header */}
       <header className="bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -51,25 +58,42 @@ function App() {
             </div>
             {packageData && (
               <div className="flex items-center gap-4">
+                {/* Dev Dependencies Toggle */}
+                <div className="flex items-center gap-2">
+                  <Settings className="w-4 h-4 text-slate-500" />
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={showDevDependencies}
+                      onChange={toggleDevDependencies}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Show dev dependencies
+                  </label>
+                </div>
+
+                {/* View Toggle */}
                 <div className="flex bg-slate-100 rounded-lg p-1">
                   <button
                     onClick={() => setView('tree')}
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
                       view === 'tree' 
                         ? 'bg-white text-slate-900 shadow-sm' 
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
+                    <TreePine className="w-4 h-4" />
                     Tree View
                   </button>
                   <button
                     onClick={() => setView('map')}
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
                       view === 'map' 
                         ? 'bg-white text-slate-900 shadow-sm' 
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
+                    <Map className="w-4 h-4" />
                     Map View
                   </button>
                 </div>
@@ -108,7 +132,7 @@ function App() {
               {packageData.description && (
                 <p className="text-slate-700 mb-4">{packageData.description}</p>
               )}
-              <div className="grid grid-cols-3 gap-4 text-sm">
+              <div className="grid grid-cols-4 gap-4 text-sm">
                 <div>
                   <span className="text-slate-500">Dependencies:</span>
                   <span className="ml-2 font-medium">{Object.keys(packageData.dependencies || {}).length}</span>
@@ -120,6 +144,12 @@ function App() {
                 <div>
                   <span className="text-slate-500">Total Analyzed:</span>
                   <span className="ml-2 font-medium">{dependencies.size}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Include Dev:</span>
+                  <span className={`ml-2 font-medium ${showDevDependencies ? 'text-green-600' : 'text-slate-400'}`}>
+                    {showDevDependencies ? 'Yes' : 'No'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -137,6 +167,7 @@ function App() {
                 <DependencyTree 
                   dependencies={dependencies} 
                   rootPackage={packageData.name}
+                  showDevDependencies={showDevDependencies}
                   onLoadDependencies={loadPackageDependencies}
                   onPackageClick={handlePackageClick}
                 />

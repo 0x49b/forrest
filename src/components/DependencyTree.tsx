@@ -5,6 +5,7 @@ import { DependencyNode } from '../types';
 interface DependencyTreeProps {
   dependencies: Map<string, DependencyNode>;
   rootPackage: string;
+  showDevDependencies: boolean;
   onLoadDependencies: (packageName: string) => void;
   onPackageClick: (packageName: string, version: string) => void;
 }
@@ -12,6 +13,7 @@ interface DependencyTreeProps {
 interface TreeNodeProps {
   node: DependencyNode;
   dependencies: Map<string, DependencyNode>;
+  showDevDependencies: boolean;
   level: number;
   expanded: Set<string>;
   onToggle: (key: string) => void;
@@ -22,13 +24,18 @@ interface TreeNodeProps {
 const TreeNode: React.FC<TreeNodeProps> = ({ 
   node, 
   dependencies, 
+  showDevDependencies,
   level, 
   expanded, 
   onToggle, 
   onLoadDependencies, 
   onPackageClick 
 }) => {
-  const hasChildren = node.dependencies && Object.keys(node.dependencies).length > 0;
+  const allDeps = {
+    ...node.dependencies,
+    ...(showDevDependencies ? node.devDependencies : {})
+  };
+  const hasChildren = allDeps && Object.keys(allDeps).length > 0;
   const canLoadDependencies = !node.loaded && !node.loading;
   const isExpanded = expanded.has(node.name);
   const indent = level * 24;
@@ -115,7 +122,12 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         
         {hasChildren && !node.loading && (
           <span className="text-xs text-slate-500 ml-2">
-            {Object.keys(node.dependencies!).length} deps
+            {Object.keys(node.dependencies || {}).length} deps
+            {showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
+              <span className="text-orange-600 ml-1">
+                +{Object.keys(node.devDependencies).length} dev
+              </span>
+            )}
           </span>
         )}
         {canLoadDependencies && (
@@ -125,20 +137,29 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
       {hasChildren && isExpanded && (
         <div className="border-l border-slate-200 ml-4">
-          {Object.entries(node.dependencies!).map(([name, version]) => {
+          {Object.entries(allDeps!).map(([name, version]) => {
             const childNode = dependencies.get(name);
+            const isDevDep = showDevDependencies && node.devDependencies?.[name];
+            
             if (childNode) {
               return (
-                <TreeNode
-                  key={`${name}-${level}`}
-                  node={childNode}
-                  dependencies={dependencies}
-                  level={level + 1}
-                  expanded={expanded}
-                  onToggle={onToggle}
-                  onLoadDependencies={onLoadDependencies}
-                  onPackageClick={onPackageClick}
-                />
+                <div key={`${name}-${level}`} className={isDevDep ? 'opacity-75' : ''}>
+                  {isDevDep && (
+                    <div className="text-xs text-orange-600 px-4 py-1" style={{ paddingLeft: `${40 + indent}px` }}>
+                      dev dependency
+                    </div>
+                  )}
+                  <TreeNode
+                    node={childNode}
+                    dependencies={dependencies}
+                    showDevDependencies={showDevDependencies}
+                    level={level + 1}
+                    expanded={expanded}
+                    onToggle={onToggle}
+                    onLoadDependencies={onLoadDependencies}
+                    onPackageClick={onPackageClick}
+                  />
+                </div>
               );
             }
             return (
@@ -148,7 +169,10 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 style={{ paddingLeft: `${40 + indent}px` }}
               >
                 <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
-                <span className="text-sm">{name}@{version}</span>
+                <span className="text-sm">
+                  {name}@{version}
+                  {isDevDep && <span className="text-orange-600 ml-2">(dev)</span>}
+                </span>
               </div>
             );
           })}
@@ -161,6 +185,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 export const DependencyTree: React.FC<DependencyTreeProps> = ({ 
   dependencies, 
   rootPackage, 
+  showDevDependencies,
   onLoadDependencies, 
   onPackageClick 
 }) => {
@@ -226,6 +251,7 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
           <TreeNode
             node={rootNode}
             dependencies={dependencies}
+            showDevDependencies={showDevDependencies}
             level={0}
             expanded={expanded}
             onToggle={handleToggle}
