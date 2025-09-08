@@ -174,6 +174,8 @@ export const useDependencyAnalyzer = () => {
   }, []);
 
   const analyzeDependencies = useCallback((packageJson: PackageJson) => {
+  }
+  )
   const analyzeDependencies = useCallback((packageJson: PackageJson, includeDevDeps: boolean = true) => {
     setLoading(true);
     setError(null);
