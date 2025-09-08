@@ -114,7 +114,15 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             {node.description && (
               <p className="text-xs text-slate-600 truncate mt-1">{node.description}</p>
             )}
-            {node.hasNoDependencies && (
+            {node.hasNoDependencies && !showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
+              <p className="text-xs text-slate-500 italic mt-1">
+                No dependencies • {Object.keys(node.devDependencies).length} dev deps available
+              </p>
+            )}
+            {node.hasNoDependencies && !showDevDependencies && (!node.devDependencies || Object.keys(node.devDependencies).length === 0) && (
+              <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
+            )}
+            {node.hasNoDependencies && showDevDependencies && (
               <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
             )}
           </div>
