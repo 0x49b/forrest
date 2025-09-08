@@ -1,256 +1,183 @@
-import React, { useState, useMemo } from 'react';
-import { ChevronRight, ChevronDown, Package, ExternalLink, Loader2 } from 'lucide-react';
-import { DependencyNode } from '../types';
+import { useState, useCallback } from 'react';
+import { DependencyNode, PackageJson } from '../types';
+import { fetchPackageJson } from '../services/npmService';
 
-interface DependencyTreeProps {
-  dependencies: Map<string, DependencyNode>;
-  rootPackage: string;
-  showDevDependencies: boolean;
-  onLoadDependencies: (packageName: string) => void;
-  onPackageClick: (packageName: string, version: string) => void;
-}
+export const useDependencyAnalyzer = () => {
+  const [dependencies, setDependencies] = useState<Map<string, DependencyNode>>(new Map());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState({ current: 0, total: 0, currentPackage: '', level: 0 });
 
-interface TreeNodeProps {
-  node: DependencyNode;
-  dependencies: Map<string, DependencyNode>;
-  showDevDependencies: boolean;
-  level: number;
-  expanded: Set<string>;
-  onToggle: (key: string) => void;
-  onLoadDependencies: (packageName: string) => void;
-  onPackageClick: (packageName: string, version: string) => void;
-}
+  const updateProgress = useCallback((current: number, total: number, currentPackage: string, level: number) => {
+    setProgress({ current, total, currentPackage, level });
+  }, []);
 
-const TreeNode: React.FC<TreeNodeProps> = ({ 
-  node, 
-  dependencies, 
-  showDevDependencies,
-  level, 
-  expanded, 
-  onToggle, 
-  onLoadDependencies, 
-  onPackageClick 
-}) => {
-  const allDeps = {
-    ...node.dependencies,
-    ...(showDevDependencies ? node.devDependencies : {})
-  };
-  const hasChildren = allDeps && Object.keys(allDeps).length > 0;
-  const canLoadDependencies = !node.loaded && !node.loading;
-  const isExpanded = expanded.has(node.name);
-  const indent = level * 24;
+  const preloadDependencies = useCallback(async (
+    packageName: string, 
+    version: string, 
+    currentLevel: number, 
+    maxLevel: number = 5,
+    visited: Set<string> = new Set()
+  ) => {
+    if (currentLevel >= maxLevel) return;
+    
+    const packageKey = `${packageName}@${version}`;
+    if (visited.has(packageKey)) return;
+    visited.add(packageKey);
 
-  const handleToggle = () => {
-    if (hasChildren || canLoadDependencies) {
-      if (canLoadDependencies) {
-        onLoadDependencies(node.name);
+    try {
+      updateProgress(visited.size, visited.size + 1, packageName, currentLevel);
+      
+      const packageData = await fetchPackageJson(packageName, version);
+      
+      const node: DependencyNode = {
+        name: packageName,
+        version: packageData.version,
+        description: packageData.description,
+        dependencies: packageData.dependencies || {},
+        devDependencies: packageData.devDependencies || {},
+        loaded: true,
+        loading: false,
+        homepage: packageData.homepage,
+        repository: packageData.repository,
+        hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
+      };
+
+      setDependencies(prev => new Map(prev).set(packageName, node));
+
+      // Preload next level dependencies
+      const deps = packageData.dependencies || {};
+      const depEntries = Object.entries(deps);
+      
+      if (depEntries.length > 0) {
+        await Promise.all(
+          depEntries.map(([depName, depVersion]) =>
+            preloadDependencies(depName, depVersion, currentLevel + 1, maxLevel, visited)
+          )
+        );
       }
-      onToggle(node.name);
+    } catch (error) {
+      console.warn(`Failed to preload ${packageName}@${version}:`, error);
+      
+      const errorNode: DependencyNode = {
+        name: packageName,
+        version: version,
+        description: `Failed to load: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        dependencies: {},
+        devDependencies: {},
+        loaded: false,
+        loading: false,
+        hasNoDependencies: true
+      };
+      
+      setDependencies(prev => new Map(prev).set(packageName, errorNode));
     }
-  };
+  }, [updateProgress]);
 
-  const handlePackageClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    // Load dependencies if not loaded
-    if (!node.loaded && !node.loading) {
-      onLoadDependencies(node.name);
-    }
-    onPackageClick(node.name, node.version);
-  };
+  const analyzeDependencies = useCallback(async (packageJson: PackageJson) => {
+    setLoading(true);
+    setError(null);
+    setDependencies(new Map());
+    
+    try {
+      // Add root package directly without fetching from npm
+      const rootNode: DependencyNode = {
+        name: packageJson.name,
+        version: packageJson.version,
+        description: packageJson.description,
+        dependencies: packageJson.dependencies || {},
+        devDependencies: packageJson.devDependencies || {},
+        loaded: true,
+        loading: false,
+        homepage: packageJson.homepage,
+        repository: packageJson.repository,
+        hasNoDependencies: !packageJson.dependencies || Object.keys(packageJson.dependencies).length === 0
+      };
 
-  const handleExternalClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (node.homepage || node.repository?.url) {
-      const url = node.homepage || node.repository?.url;
-      if (url) {
-        window.open(url.replace('git+', '').replace('.git', ''), '_blank');
-      }
-    } else {
-      window.open(`https://www.npmjs.com/package/${node.name}`, '_blank');
-    }
-  };
+      setDependencies(new Map([[packageJson.name, rootNode]]));
 
-  return (
-    <div className="select-none">
-      <div 
-        className={`flex items-center py-2 px-4 hover:bg-slate-50 transition-colors group ${
-          level === 0 ? 'bg-blue-50 border-l-4 border-blue-500' : ''
-        } ${hasChildren || canLoadDependencies ? 'cursor-pointer' : 'cursor-default'}`}
-        style={{ paddingLeft: `${16 + indent}px` }}
-        onClick={handleToggle}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          {node.loading ? (
-            <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
-          ) : hasChildren || canLoadDependencies ? (
-            isExpanded ? (
-              <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
-            ) : (
-              <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
-            )
-          ) : (
-            <div className="w-4 h-4 flex-shrink-0" />
-          )}
-          
-          <Package className="w-4 h-4 text-slate-600 flex-shrink-0" />
-          
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handlePackageClick}
-                className="font-medium text-slate-900 hover:text-blue-600 truncate transition-colors text-left"
-              >
-                {node.name}
-              </button>
-              <span className="text-xs text-slate-500 flex-shrink-0">v{node.version}</span>
-              <button
-                onClick={handleExternalClick}
-                className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-slate-400 hover:text-blue-600 transition-all"
-                title="View on npm"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </button>
-            </div>
-            {node.description && (
-              <p className="text-xs text-slate-600 truncate mt-1">{node.description}</p>
-            )}
-            {node.hasNoDependencies && (
-              <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
-            )}
-          </div>
-        </div>
+      // Preload external dependencies starting from level 1
+      const deps = packageJson.dependencies || {};
+      const depEntries = Object.entries(deps);
+      
+      if (depEntries.length > 0) {
+        updateProgress(0, depEntries.length, 'Starting preload...', 1);
         
-        {hasChildren && !node.loading && (
-          <span className="text-xs text-slate-500 ml-2">
-            {Object.keys(node.dependencies!).length} deps
-          </span>
-        )}
-        {canLoadDependencies && (
-          <span className="text-xs text-blue-600 ml-2">Click to load</span>
-        )}
-      </div>
-
-      {hasChildren && isExpanded && (
-        <div className="border-l border-slate-200 ml-4">
-          {Object.entries(allDeps!).map(([name, version]) => {
-            const childNode = dependencies.get(name);
-            const isDevDep = showDevDependencies && node.devDependencies?.[name];
-            
-            if (childNode) {
-              return (
-                <div key={`${name}-${level}`} className={isDevDep ? 'opacity-75' : ''}>
-                  {isDevDep && (
-                    <div className="text-xs text-orange-600 px-4 py-1" style={{ paddingLeft: `${40 + indent}px` }}>
-                      dev dependency
-                    </div>
-                  )}
-                  <TreeNode
-                    node={childNode}
-                    dependencies={dependencies}
-                    showDevDependencies={showDevDependencies}
-                    level={level + 1}
-                    expanded={expanded}
-                    onToggle={onToggle}
-                    onLoadDependencies={onLoadDependencies}
-                    onPackageClick={onPackageClick}
-                  />
-                </div>
-              );
-            }
-            return (
-              <div
-                key={`${name}-${level}-loading`}
-                className="flex items-center py-2 px-4 text-slate-500"
-                style={{ paddingLeft: `${40 + indent}px` }}
-              >
-                <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
-                <span className="text-sm">
-                  {name}@{version}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-export const DependencyTree: React.FC<DependencyTreeProps> = ({ 
-  dependencies, 
-  rootPackage, 
-  onLoadDependencies, 
-  onPackageClick 
-}) => {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set([rootPackage]));
-
-  const rootNode = useMemo(() => {
-    return dependencies.get(rootPackage);
-  }, [dependencies, rootPackage]);
-
-  const handleToggle = (key: string) => {
-    setExpanded(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(key)) {
-        newSet.delete(key);
-      } else {
-        newSet.add(key);
+        await Promise.all(
+          depEntries.map(([depName, depVersion]) =>
+            preloadDependencies(depName, depVersion, 1, 5)
+          )
+        );
       }
-      return newSet;
+      
+      updateProgress(0, 0, '', 0);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to analyze dependencies');
+    } finally {
+      setLoading(false);
+    }
+  }, [preloadDependencies, updateProgress]);
+
+  const loadDependencies = useCallback(async (packageName: string) => {
+    const currentNode = dependencies.get(packageName);
+    if (!currentNode || currentNode.loaded || currentNode.loading) return;
+
+    // Mark as loading
+    setDependencies(prev => {
+      const newMap = new Map(prev);
+      const node = newMap.get(packageName);
+      if (node) {
+        newMap.set(packageName, { ...node, loading: true });
+      }
+      return newMap;
     });
+
+    try {
+      updateProgress(1, 1, packageName, 0);
+      
+      const packageData = await fetchPackageJson(packageName, currentNode.version);
+      
+      const updatedNode: DependencyNode = {
+        ...currentNode,
+        dependencies: packageData.dependencies || {},
+        devDependencies: packageData.devDependencies || {},
+        loaded: true,
+        loading: false,
+        description: packageData.description || currentNode.description,
+        homepage: packageData.homepage,
+        repository: packageData.repository,
+        hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
+      };
+
+      setDependencies(prev => new Map(prev).set(packageName, updatedNode));
+      
+      updateProgress(0, 0, '', 0);
+    } catch (error) {
+      setDependencies(prev => {
+        const newMap = new Map(prev);
+        const node = newMap.get(packageName);
+        if (node) {
+          newMap.set(packageName, { 
+            ...node, 
+            loading: false, 
+            loaded: false,
+            description: `Failed to load: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            hasNoDependencies: true
+          });
+        }
+        return newMap;
+      });
+      
+      updateProgress(0, 0, '', 0);
+    }
+  }, [dependencies, updateProgress]);
+
+  return {
+    dependencies,
+    loading,
+    error,
+    progress,
+    analyzeDependencies,
+    loadDependencies
   };
-
-  const handleExpandAll = () => {
-    setExpanded(new Set(Array.from(dependencies.keys())));
-  };
-
-  const handleCollapseAll = () => {
-    setExpanded(new Set([rootPackage]));
-  };
-
-  if (!rootNode) {
-    return (
-      <div className="p-8 text-center">
-        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-slate-600">Loading dependency tree...</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="h-[600px] flex flex-col">
-      {/* Controls */}
-      <div className="flex items-center justify-between p-4 border-b border-slate-200">
-        <h3 className="text-lg font-medium text-slate-900">Dependency Tree</h3>
-        <div className="flex gap-2">
-          <button
-            onClick={handleExpandAll}
-            className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
-          >
-            Expand All
-          </button>
-          <button
-            onClick={handleCollapseAll}
-            className="px-3 py-1 text-sm text-slate-600 hover:bg-slate-50 rounded transition-colors"
-          >
-            Collapse All
-          </button>
-        </div>
-      </div>
-
-      {/* Tree */}
-      <div className="flex-1 overflow-auto">
-        <div className="group">
-          <TreeNode
-            node={rootNode}
-            dependencies={dependencies}
-            level={0}
-            expanded={expanded}
-            onToggle={handleToggle}
-            onLoadDependencies={onLoadDependencies}
-            onPackageClick={onPackageClick}
-          />
-        </div>
-      </div>
-    </div>
-  );
 };
