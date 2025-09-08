@@ -17,6 +17,7 @@ export const useDependencyAnalyzer = () => {
   const [pendingDependencies, setPendingDependencies] = useState<Array<{name: string, version: string, level: number}>>([]);
   const [completedDependencies, setCompletedDependencies] = useState<Set<string>>(new Set());
   const [totalDependenciesToLoad, setTotalDependenciesToLoad] = useState(0);
+  const [allDiscoveredDependencies, setAllDiscoveredDependencies] = useState<Set<string>>(new Set());
   
   const MAX_WORKERS = 30;
   const MAX_DEPENDENCY_LEVELS = 2; // Configure max depth here - change this to adjust levels
@@ -39,16 +40,36 @@ export const useDependencyAnalyzer = () => {
         case 'DEPENDENCY_LOADED':
           setDependencies(prev => new Map(prev).set(payload.name, payload));
           
+          // Track all discovered dependencies
+          const allChildDeps = [
+            ...Object.keys(payload.dependencies || {}),
+            ...Object.keys(payload.devDependencies || {})
+          ];
+          setAllDiscoveredDependencies(prev => {
+            const newSet = new Set(prev);
+            allChildDeps.forEach(dep => newSet.add(dep));
+            return newSet;
+          });
+          
           // Queue child dependencies if within level limit
           if (level < MAX_DEPENDENCY_LEVELS) {
             const childDeps = [
-              ...Object.entries(payload.dependencies || {}),
-              ...Object.entries(payload.devDependencies || {})
+              ...Object.entries(payload.dependencies || {})
             ];
+            
+            // Add dev dependencies only if showDevDependencies is true
+            if (showDevDependencies) {
+              childDeps.push(...Object.entries(payload.devDependencies || {}));
+            }
             
             const newDeps = childDeps
               .map(([name, version]) => ({ name, version, level: level + 1 }))
-              .filter(dep => !completedDependencies.has(`${dep.name}@${dep.version}`) && !pendingDependencies.some(p => p.name === dep.name));
+              .filter(dep => {
+                const workerId = `${dep.name}@${dep.version}`;
+                return !completedDependencies.has(workerId) && 
+                       !pendingDependencies.some(p => p.name === dep.name) &&
+                       !dependencies.has(dep.name);
+              });
             
             if (newDeps.length > 0) {
               setPendingDependencies(prev => [...prev, ...newDeps]);
@@ -190,6 +211,7 @@ export const useDependencyAnalyzer = () => {
     setActiveWorkers(0);
     setPendingDependencies([]);
     setCompletedDependencies(new Set());
+    setAllDiscoveredDependencies(new Set());
     setTotalDependenciesToLoad(0);
     setPackageData(packageJson);
     setShowDevDependencies(includeDevDeps);
@@ -276,39 +298,37 @@ export const useDependencyAnalyzer = () => {
       
       // If enabling dev dependencies, load them for all existing packages
       if (newValue) {
-        const packagesToUpdate: Array<{name: string, version: string, level: number}> = [];
+        const newDevDepsToLoad: Array<{name: string, version: string, level: number}> = [];
         
         dependencies.forEach((node, name) => {
-          if (node.loaded && node.devDependencies && Object.keys(node.devDependencies).length > 0) {
-            // Add dev dependencies that haven't been loaded or queued yet
+          if (node.loaded && node.devDependencies) {
             Object.entries(node.devDependencies).forEach(([depName, depVersion]) => {
-              // Check if this dependency is already loaded, being processed, or queued
-              const isAlreadyLoaded = dependencies.has(depName);
-              const isAlreadyQueued = pendingDependencies.some(p => p.name === depName);
               const workerId = `${depName}@${depVersion}`;
-              const isCompleted = completedDependencies.has(workerId);
               
-              if (!isAlreadyLoaded && !isAlreadyQueued && !isCompleted) {
-                packagesToUpdate.push({
+              // Only load if we haven't seen this dependency at all
+              if (!dependencies.has(depName) && 
+                  !completedDependencies.has(workerId) &&
+                  !pendingDependencies.some(p => p.name === depName)) {
+                newDevDepsToLoad.push({
                   name: depName,
                   version: depVersion,
-                  level: 1 // Start dev deps at level 1, they'll be limited by MAX_DEPENDENCY_LEVELS
+                  level: 1
                 });
               }
             });
           }
         });
         
-        if (packagesToUpdate.length > 0) {
+        if (newDevDepsToLoad.length > 0) {
           setLoading(true);
-          setPendingDependencies(prev => [...prev, ...packagesToUpdate]);
-          setTotalDependenciesToLoad(prev => prev + packagesToUpdate.length);
+          setPendingDependencies(prev => [...prev, ...newDevDepsToLoad]);
+          setTotalDependenciesToLoad(prev => prev + newDevDepsToLoad.length);
         }
       }
       
       return newValue;
     });
-  }, [dependencies, completedDependencies, pendingDependencies]);
+  }, [dependencies, completedDependencies, pendingDependencies, showDevDependencies]);
 
   const reset = useCallback(() => {
     // Terminate all active workers
@@ -317,6 +337,7 @@ export const useDependencyAnalyzer = () => {
     setActiveWorkers(0);
     setPendingDependencies([]);
     setCompletedDependencies(new Set());
+    setAllDiscoveredDependencies(new Set());
     setTotalDependenciesToLoad(0);
     setPackageData(null);
     setDependencies(new Map());
