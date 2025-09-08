@@ -58,7 +58,6 @@ export const useDependencyAnalyzer = () => {
           
           // Mark as processed and clean up worker
           setProcessedDependencies(prev => new Set(prev).add(workerId));
-          setActiveWorkers(prev => prev - 1);
           
           // Clean up worker
           worker.terminate();
@@ -67,6 +66,8 @@ export const useDependencyAnalyzer = () => {
             newMap.delete(workerId);
             return newMap;
           });
+          
+          setActiveWorkers(prev => prev - 1);
           break;
           
         case 'DEPENDENCY_ERROR':
@@ -87,7 +88,6 @@ export const useDependencyAnalyzer = () => {
           
           // Mark as processed and clean up worker
           setProcessedDependencies(prev => new Set(prev).add(workerId));
-          setActiveWorkers(prev => prev - 1);
           
           // Clean up worker
           worker.terminate();
@@ -96,6 +96,8 @@ export const useDependencyAnalyzer = () => {
             newMap.delete(workerId);
             return newMap;
           });
+          
+          setActiveWorkers(prev => prev - 1);
           break;
       }
     };
@@ -149,21 +151,23 @@ export const useDependencyAnalyzer = () => {
   // Update progress based on processed dependencies
   React.useEffect(() => {
     const current = processedDependencies.size;
-    const total = Math.max(totalDependencies, current);
+    const total = totalDependencies;
     
-    setProgress({
-      current,
-      total,
-      currentPackage: pendingDependencies[0]?.name || '',
-      level: Math.min(...Array.from(pendingDependencies).map(d => d.level)) || 0
-    });
+    if (total > 0) {
+      setProgress({
+        current,
+        total,
+        currentPackage: pendingDependencies[0]?.name || '',
+        level: pendingDependencies.length > 0 ? Math.min(...pendingDependencies.map(d => d.level)) : MAX_DEPENDENCY_LEVELS
+      });
+    }
     
     // Check if loading is complete
-    if (current > 0 && pendingDependencies.length === 0 && activeWorkers === 0) {
+    if (totalDependencies > 0 && pendingDependencies.length === 0 && activeWorkers === 0) {
       setLoading(false);
       setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
     }
-  }, [processedDependencies.size, totalDependencies, pendingDependencies.length, activeWorkers]);
+  }, [processedDependencies.size, totalDependencies, pendingDependencies.length, activeWorkers, pendingDependencies]);
 
   // Process pending dependencies when slots become available
   React.useEffect(() => {
