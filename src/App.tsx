@@ -9,6 +9,7 @@ import { Package, TreePine, Map, Settings } from 'lucide-react';
 
 function App() {
   const [view, setView] = useState<'tree' | 'map'>('tree');
+  const [initialShowDevDependencies, setInitialShowDevDependencies] = useState(true);
   const { 
     packageData, 
     dependencies, 
@@ -28,11 +29,11 @@ function App() {
   const handlePackageJsonSubmit = useCallback((content: string) => {
     try {
       const parsed = JSON.parse(content);
-      analyzeDependencies(parsed);
+      analyzeDependencies(parsed, initialShowDevDependencies);
     } catch (err) {
       console.error('Invalid JSON:', err);
     }
-  }, [analyzeDependencies]);
+  }, [analyzeDependencies, initialShowDevDependencies]);
 
   const handlePackageClick = useCallback((packageName: string, version: string) => {
     addToBreadcrumbs(packageName, version);
@@ -117,7 +118,11 @@ function App() {
       <main className="max-w-7xl mx-auto px-6 py-8">
         {!packageData ? (
           <div className="max-w-2xl mx-auto">
-            <PackageJsonInput onSubmit={handlePackageJsonSubmit} />
+            <PackageJsonInput 
+              onSubmit={handlePackageJsonSubmit}
+              showDevDependencies={initialShowDevDependencies}
+              onToggleDevDependencies={setInitialShowDevDependencies}
+            />
           </div>
         ) : (
           <div className="space-y-6">

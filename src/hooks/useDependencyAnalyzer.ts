@@ -139,11 +139,11 @@ export const useDependencyAnalyzer = () => {
       const worker = createWorker(name, version, level);
       worker.postMessage({
         type: 'LOAD_SINGLE_DEPENDENCY',
-        payload: { packageName: name, version },
+        payload: { packageName: name, version, includeDevDeps: showDevDependencies },
         id: workerId
       });
     });
-  }, [activeWorkers, pendingDependencies, processedDependencies, createWorker]);
+  }, [activeWorkers, pendingDependencies, processedDependencies, createWorker, showDevDependencies]);
 
   // Update progress based on processed dependencies
   React.useEffect(() => {
@@ -174,6 +174,7 @@ export const useDependencyAnalyzer = () => {
   }, []);
 
   const analyzeDependencies = useCallback((packageJson: PackageJson) => {
+  const analyzeDependencies = useCallback((packageJson: PackageJson, includeDevDeps: boolean = true) => {
     setLoading(true);
     setError(null);
     setDependencies(new Map());
@@ -183,7 +184,7 @@ export const useDependencyAnalyzer = () => {
     setProcessedDependencies(new Set());
     setTotalDependencies(0);
     setPackageData(packageJson);
-    setShowDevDependencies(true);
+    setShowDevDependencies(includeDevDeps);
     setBreadcrumbs([{ name: packageJson.name, version: packageJson.version }]);
     
     // Add root package directly without fetching from npm
@@ -204,7 +205,7 @@ export const useDependencyAnalyzer = () => {
 
     // Queue initial dependencies for loading
     const deps = packageJson.dependencies || {};
-    const devDeps = packageJson.devDependencies || {};
+    const devDeps = includeDevDeps ? (packageJson.devDependencies || {}) : {};
     const allDeps = { ...deps, ...devDeps };
     
     if (Object.keys(allDeps).length > 0) {

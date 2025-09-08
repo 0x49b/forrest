@@ -10,6 +10,7 @@ interface WorkerMessage {
     maxLevel?: number;
     currentLevel?: number;
     visited?: string[];
+    includeDevDeps?: boolean;
   };
   id: string;
 }
@@ -219,7 +220,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 
   try {
     if (type === 'LOAD_SINGLE_DEPENDENCY') {
-      const { packageName, version } = payload;
+      const { packageName, version, includeDevDeps = true } = payload;
       
       try {
         const packageData = await fetchPackageJson(packageName, version);
@@ -231,7 +232,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
             version: packageData.version,
             description: packageData.description,
             dependencies: packageData.dependencies || {},
-            devDependencies: packageData.devDependencies || {},
+            devDependencies: includeDevDeps ? (packageData.devDependencies || {}) : {},
             loaded: true,
             loading: false,
             homepage: packageData.homepage,
