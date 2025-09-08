@@ -19,6 +19,7 @@ export const useDependencyAnalyzer = () => {
   const [totalDependencies, setTotalDependencies] = useState(0);
   
   const MAX_WORKERS = 30;
+  const MAX_DEPENDENCY_LEVELS = 2; // Configure max depth here - change this to adjust levels
 
   const createWorker = useCallback((packageName: string, version: string, level: number) => {
     const workerId = `${packageName}@${version}`;
@@ -39,7 +40,7 @@ export const useDependencyAnalyzer = () => {
           setDependencies(prev => new Map(prev).set(payload.name, payload));
           
           // Queue child dependencies if within level limit
-          if (level < 5) {
+          if (level < MAX_DEPENDENCY_LEVELS) {
             const childDeps = [
               ...Object.entries(payload.dependencies || {}),
               ...Object.entries(payload.devDependencies || {})
@@ -278,7 +279,7 @@ export const useDependencyAnalyzer = () => {
                 packagesToUpdate.push({
                   name: depName,
                   version: depVersion,
-                  level: 2 // Assume level 2 for dev deps
+                  level: 1 // Dev deps are at level 1 (will be limited by MAX_DEPENDENCY_LEVELS)
                 });
               }
             });
