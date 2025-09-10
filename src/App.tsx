@@ -6,6 +6,7 @@ import { Breadcrumbs } from './components/Breadcrumbs';
 import { ProgressBar } from './components/ProgressBar';
 import { useDependencyAnalyzer } from './hooks/useDependencyAnalyzer';
 import { Package, TreePine, Map, Settings } from 'lucide-react';
+import packageJson from '../package.json';
 
 // Helper function to check if a node has a path through regular dependencies
 const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, DependencyNode>, rootName: string): boolean => {
@@ -78,7 +79,7 @@ function App() {
                 <Package className="w-6 h-6 text-blue-600" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-slate-900">Package Dependency Analyzer</h1>
+                <h1 className="text-2xl font-bold text-slate-900">Package Dependency Analyzer {packageJson.version}</h1>
                 <p className="text-slate-600">Visualize and explore npm package dependencies</p>
               </div>
             </div>
