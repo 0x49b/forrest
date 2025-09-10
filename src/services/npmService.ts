@@ -64,8 +64,7 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
     // First, try to get the package metadata
     const response = await fetch(`${NPM_REGISTRY_BASE}/${encodedPackageName}`, {
       headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'dependency-analyzer'
+        'Accept': 'application/json'
       },
       signal: controller.signal
     });
