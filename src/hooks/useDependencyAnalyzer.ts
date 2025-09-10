@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { DependencyNode, PackageJson, BreadcrumbItem, LoadingProgress } from '../types';
+import { fetchPackageJson } from '../services/npmService';
 import React from 'react';
 
 export const useDependencyAnalyzer = () => {
@@ -11,163 +12,125 @@ export const useDependencyAnalyzer = () => {
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
   const [showDevDependencies, setShowDevDependencies] = useState(false);
 
-  // Worker pool management
-  const [workers, setWorkers] = useState<Map<string, Worker>>(new Map());
-  const [activeWorkers, setActiveWorkers] = useState(0);
+  // Async loading management
+  const [activeRequests, setActiveRequests] = useState(0);
   const [pendingDependencies, setPendingDependencies] = useState<Array<{name: string, version: string, level: number}>>([]);
   const [completedDependencies, setCompletedDependencies] = useState<Set<string>>(new Set());
   const [totalDependenciesToLoad, setTotalDependenciesToLoad] = useState(0);
   const [allDiscoveredDependencies, setAllDiscoveredDependencies] = useState<Set<string>>(new Set());
   
-  const MAX_WORKERS = 30;
+  const MAX_CONCURRENT_REQUESTS = 10;
   const MAX_DEPENDENCY_LEVELS = 2; // Configure max depth here - change this to adjust levels
 
-  const createWorker = useCallback((packageName: string, version: string, level: number) => {
-    const workerId = `${packageName}@${version}`;
+  const loadSingleDependency = useCallback(async (packageName: string, version: string, level: number) => {
+    const requestId = `${packageName}@${version}`;
     
-    if (workers.has(workerId)) {
-      return workers.get(workerId)!;
-    }
-    
-    const worker = new Worker(new URL('../workers/dependencyWorker.ts', import.meta.url), {
-      type: 'module'
-    });
-    
-    worker.onmessage = (event) => {
-      const { type, payload, id } = event.data;
-      
-      switch (type) {
-        case 'DEPENDENCY_LOADED':
-          setDependencies(prev => new Map(prev).set(payload.name, payload));
-          
-          // Track all discovered dependencies
-          const allChildDeps = [
-            ...Object.keys(payload.dependencies || {}),
-            ...Object.keys(payload.devDependencies || {})
-          ];
-          setAllDiscoveredDependencies(prev => {
-            const newSet = new Set(prev);
-            allChildDeps.forEach(dep => newSet.add(dep));
-            return newSet;
-          });
-          
-          // Queue child dependencies if within level limit
-          if (level < MAX_DEPENDENCY_LEVELS) {
-            const childDeps = [
-              ...Object.entries(payload.dependencies || {})
-            ];
-            
-            // Add dev dependencies only if showDevDependencies is true
-            if (showDevDependencies) {
-              childDeps.push(...Object.entries(payload.devDependencies || {}));
-            }
-            
-            const newDeps = childDeps
-              .map(([name, version]) => ({ name, version, level: level + 1 }))
-              .filter(dep => {
-                const workerId = `${dep.name}@${dep.version}`;
-                return !completedDependencies.has(workerId) && 
-                       !pendingDependencies.some(p => p.name === dep.name) &&
-                       !dependencies.has(dep.name);
-              });
-            
-            if (newDeps.length > 0) {
-              setPendingDependencies(prev => [...prev, ...newDeps]);
-              setTotalDependenciesToLoad(prev => prev + newDeps.length);
-            }
-          }
-          
-          // Mark as completed and clean up worker
-          setCompletedDependencies(prev => new Set(prev).add(workerId));
-          
-          // Clean up worker
-          worker.terminate();
-          setWorkers(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(workerId);
-            return newMap;
-          });
-          
-          setActiveWorkers(prev => prev - 1);
-          break;
-          
-        case 'DEPENDENCY_ERROR':
-          console.warn(`Failed to load ${payload.name}@${payload.version}:`, payload.error);
-          
-          const errorNode: DependencyNode = {
-            name: payload.name,
-            version: payload.version,
-            description: `Failed to load: ${payload.error}`,
-            dependencies: {},
-            devDependencies: {},
-            loaded: false,
-            loading: false,
-            hasNoDependencies: true
-          };
-          
-          setDependencies(prev => new Map(prev).set(payload.name, errorNode));
-          
-          // Mark as completed and clean up worker
-          setCompletedDependencies(prev => new Set(prev).add(workerId));
-          
-          // Clean up worker
-          worker.terminate();
-          setWorkers(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(workerId);
-            return newMap;
-          });
-          
-          setActiveWorkers(prev => prev - 1);
-          break;
-      }
-    };
-    
-    worker.onerror = (error) => {
-      console.error(`Worker error for ${workerId}:`, error);
-      setActiveWorkers(prev => prev - 1);
-      
-      // Clean up worker
-      worker.terminate();
-      setWorkers(prev => {
-        const newMap = new Map(prev);
-        newMap.delete(workerId);
-        return newMap;
-      });
-    };
-    
-    setWorkers(prev => new Map(prev).set(workerId, worker));
-    return worker;
-  }, [workers, completedDependencies, pendingDependencies]);
-
-  // Process pending dependencies with worker limit
-  const processPendingDependencies = useCallback(() => {
-    if (activeWorkers >= MAX_WORKERS || pendingDependencies.length === 0) {
+    if (completedDependencies.has(requestId)) {
       return;
     }
     
-    const availableSlots = MAX_WORKERS - activeWorkers;
+    setActiveRequests(prev => prev + 1);
+    
+    try {
+      const packageData = await fetchPackageJson(packageName, version);
+      
+      const dependencyNode: DependencyNode = {
+        name: packageName,
+        version: packageData.version,
+        description: packageData.description,
+        dependencies: packageData.dependencies || {},
+        devDependencies: packageData.devDependencies || {},
+        loaded: true,
+        loading: false,
+        homepage: packageData.homepage,
+        repository: packageData.repository,
+        hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
+      };
+      
+      setDependencies(prev => new Map(prev).set(packageName, dependencyNode));
+      
+      // Track all discovered dependencies
+      const allChildDeps = [
+        ...Object.keys(packageData.dependencies || {}),
+        ...Object.keys(packageData.devDependencies || {})
+      ];
+      setAllDiscoveredDependencies(prev => {
+        const newSet = new Set(prev);
+        allChildDeps.forEach(dep => newSet.add(dep));
+        return newSet;
+      });
+      
+      // Queue child dependencies if within level limit
+      if (level < MAX_DEPENDENCY_LEVELS) {
+        const childDeps = [
+          ...Object.entries(packageData.dependencies || {})
+        ];
+        
+        // Add dev dependencies only if showDevDependencies is true
+        if (showDevDependencies) {
+          childDeps.push(...Object.entries(packageData.devDependencies || {}));
+        }
+        
+        const newDeps = childDeps
+          .map(([name, version]) => ({ name, version, level: level + 1 }))
+          .filter(dep => {
+            const depId = `${dep.name}@${dep.version}`;
+            return !completedDependencies.has(depId) && 
+                   !pendingDependencies.some(p => p.name === dep.name) &&
+                   !dependencies.has(dep.name);
+          });
+        
+        if (newDeps.length > 0) {
+          setPendingDependencies(prev => [...prev, ...newDeps]);
+          setTotalDependenciesToLoad(prev => prev + newDeps.length);
+        }
+      }
+      
+      // Mark as completed
+      setCompletedDependencies(prev => new Set(prev).add(requestId));
+      
+    } catch (error) {
+      console.warn(`Failed to load ${packageName}@${version}:`, error);
+      
+      const errorNode: DependencyNode = {
+        name: packageName,
+        version: version,
+        description: `Failed to load: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        dependencies: {},
+        devDependencies: {},
+        loaded: false,
+        loading: false,
+        hasNoDependencies: true
+      };
+      
+      setDependencies(prev => new Map(prev).set(packageName, errorNode));
+      setCompletedDependencies(prev => new Set(prev).add(requestId));
+    } finally {
+      setActiveRequests(prev => prev - 1);
+    }
+  }, [completedDependencies, pendingDependencies, dependencies, showDevDependencies, MAX_DEPENDENCY_LEVELS]);
+
+  // Process pending dependencies with worker limit
+  const processPendingDependencies = useCallback(() => {
+    if (activeRequests >= MAX_CONCURRENT_REQUESTS || pendingDependencies.length === 0) {
+      return;
+    }
+    
+    const availableSlots = MAX_CONCURRENT_REQUESTS - activeRequests;
     const toProcess = pendingDependencies.slice(0, availableSlots);
     
     setPendingDependencies(prev => prev.slice(availableSlots));
     
     toProcess.forEach(({ name, version, level }) => {
-      const workerId = `${name}@${version}`;
+      const requestId = `${name}@${version}`;
       
-      if (completedDependencies.has(workerId)) {
+      if (completedDependencies.has(requestId)) {
         return;
       }
       
-      setActiveWorkers(prev => prev + 1);
-      
-      const worker = createWorker(name, version, level);
-      worker.postMessage({
-        type: 'LOAD_SINGLE_DEPENDENCY',
-        payload: { packageName: name, version, includeDevDeps: showDevDependencies },
-        id: workerId
-      });
+      loadSingleDependency(name, version, level);
     });
-  }, [activeWorkers, pendingDependencies, completedDependencies, createWorker, showDevDependencies]);
+  }, [activeRequests, pendingDependencies, completedDependencies, loadSingleDependency]);
 
   // Update progress based on processed dependencies
   React.useEffect(() => {
@@ -193,11 +156,11 @@ export const useDependencyAnalyzer = () => {
     }
     
     // Check if loading is complete
-    if (totalDependenciesToLoad > 0 && pendingDependencies.length === 0 && activeWorkers === 0) {
+    if (totalDependenciesToLoad > 0 && pendingDependencies.length === 0 && activeRequests === 0) {
       setLoading(false);
       setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
     }
-  }, [completedDependencies.size, totalDependenciesToLoad, pendingDependencies.length, activeWorkers, pendingDependencies, MAX_DEPENDENCY_LEVELS]);
+  }, [completedDependencies.size, totalDependenciesToLoad, pendingDependencies.length, activeRequests, pendingDependencies, MAX_DEPENDENCY_LEVELS]);
 
   // Helper function for progress calculation
   const hasRegularDependencyPathInProgress = (targetName: string): boolean => {
@@ -233,8 +196,7 @@ export const useDependencyAnalyzer = () => {
     setLoading(true);
     setError(null);
     setDependencies(new Map());
-    setWorkers(new Map());
-    setActiveWorkers(0);
+    setActiveRequests(0);
     setPendingDependencies([]);
     setCompletedDependencies(new Set());
     setAllDiscoveredDependencies(new Set());
@@ -357,10 +319,7 @@ export const useDependencyAnalyzer = () => {
   }, [dependencies, completedDependencies, pendingDependencies, showDevDependencies]);
 
   const reset = useCallback(() => {
-    // Terminate all active workers
-    workers.forEach(worker => worker.terminate());
-    setWorkers(new Map());
-    setActiveWorkers(0);
+    setActiveRequests(0);
     setPendingDependencies([]);
     setCompletedDependencies(new Set());
     setAllDiscoveredDependencies(new Set());
@@ -371,7 +330,7 @@ export const useDependencyAnalyzer = () => {
     setError(null);
     setProgress({ current: 0, total: 0, currentPackage: '', level: 0 });
     setShowDevDependencies(false);
-  }, [workers]);
+  }, []);
 
   return {
     packageData,
