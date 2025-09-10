@@ -123,6 +123,27 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
     }));
   };
 
+  // Add wheel event listener with passive: false to allow preventDefault
+  useEffect(() => {
+    const svgElement = svgRef.current;
+    if (!svgElement) return;
+
+    const handleWheelEvent = (e: WheelEvent) => {
+      e.preventDefault();
+      const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      setTransform(prev => ({
+        ...prev,
+        scale: Math.max(0.1, Math.min(3, prev.scale * scaleFactor))
+      }));
+    };
+
+    svgElement.addEventListener('wheel', handleWheelEvent, { passive: false });
+
+    return () => {
+      svgElement.removeEventListener('wheel', handleWheelEvent);
+    };
+  }, []);
+
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
       setIsDragging(true);
@@ -224,7 +245,6 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
       <svg
         ref={svgRef}
         className="w-full h-full cursor-grab active:cursor-grabbing"
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
