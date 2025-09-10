@@ -4,6 +4,10 @@ const NPM_REGISTRY_BASE = 'https://registry.npmjs.org';
 
 export const fetchPackageJson = async (packageName: string, version?: string): Promise<PackageJson> => {
   try {
+    // Create AbortController with 10 second timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
     // Handle npm: aliases (e.g., "jiti-v2.1@npm:jiti@2.1.x")
     if (packageName.includes('@npm:')) {
       const parts = packageName.split('@npm:');
@@ -12,6 +16,7 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
         const [actualName, actualVersion] = actualPackage.includes('@') 
           ? actualPackage.split('@')
           : [actualPackage, version];
+        clearTimeout(timeoutId);
         return fetchPackageJson(actualName, actualVersion);
       }
     }
@@ -22,6 +27,7 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
       const [actualName, actualVersion] = npmPart.includes('@')
         ? npmPart.split('@')
         : [npmPart, 'latest'];
+      clearTimeout(timeoutId);
       return fetchPackageJson(actualName, actualVersion);
     }
     
@@ -34,6 +40,7 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
       version.startsWith('link:') ||
       version.startsWith('workspace:')
     )) {
+      clearTimeout(timeoutId);
       return {
         name: packageName,
         version: version,
@@ -59,8 +66,11 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
       headers: {
         'Accept': 'application/json',
         'User-Agent': 'dependency-analyzer'
-      }
+      },
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -129,6 +139,11 @@ export const fetchPackageJson = async (packageName: string, version?: string): P
       license: versionData.license
     };
   } catch (error) {
+    // Handle AbortError specifically for timeout
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timed out while fetching ${packageName}@${version || 'latest'} (10 second timeout)`);
+    }
+    
     console.error(`Error fetching ${packageName}@${version}:`, error);
     
     if (error instanceof Error) {
