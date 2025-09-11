@@ -255,10 +255,10 @@ export const useDependencyAnalyzer = () => {
       return newMap;
     });
 
-    // Load dependencies immediately
-    const loadPackage = async () => {
+    // Load package data and its dependencies
+    const loadPackageAndDependencies = async () => {
       try {
-        setLoading(true);
+        console.log(`Loading dependencies for ${packageName}@${currentNode.version}`);
         const packageData = await fetchPackageJson(packageName, currentNode.version);
         
         const dependencyNode: DependencyNode = {
@@ -271,10 +271,43 @@ export const useDependencyAnalyzer = () => {
           loading: false,
           homepage: packageData.homepage,
           repository: packageData.repository,
-          hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
+          hasNoDependencies: (!packageData.dependencies || Object.keys(packageData.dependencies).length === 0) && 
+                           (!showDevDependencies || !packageData.devDependencies || Object.keys(packageData.devDependencies).length === 0)
         };
         
+        // Update the main node
         setDependencies(prev => new Map(prev).set(packageName, dependencyNode));
+        
+        // Add child dependencies as unloaded nodes
+        const childDeps = Object.entries(packageData.dependencies || {});
+        const childDevDeps = showDevDependencies ? Object.entries(packageData.devDependencies || {}) : [];
+        const allChildDeps = [...childDeps, ...childDevDeps];
+        
+        if (allChildDeps.length > 0) {
+          setDependencies(prev => {
+            const newMap = new Map(prev);
+            
+            allChildDeps.forEach(([depName, depVersion]) => {
+              if (!newMap.has(depName)) {
+                const childNode: DependencyNode = {
+                  name: depName,
+                  version: depVersion,
+                  description: undefined,
+                  dependencies: {},
+                  devDependencies: {},
+                  loaded: false,
+                  loading: false,
+                  hasNoDependencies: false
+                };
+                newMap.set(depName, childNode);
+              }
+            });
+            
+            return newMap;
+          });
+        }
+        
+        console.log(`Successfully loaded ${packageName} with ${allChildDeps.length} child dependencies`);
         
       } catch (error) {
         console.warn(`Failed to load ${packageName}@${currentNode.version}:`, error instanceof Error ? error.message : 'Unknown error');
@@ -282,7 +315,7 @@ export const useDependencyAnalyzer = () => {
         const errorNode: DependencyNode = {
           name: packageName,
           version: currentNode.version,
-          description: `Not resolved: ${error instanceof Error ? error.message : 'Package not found'}`,
+          description: `Failed to load: ${error instanceof Error ? error.message : 'Package not found'}`,
           dependencies: {},
           devDependencies: {},
           loaded: true,
@@ -291,12 +324,10 @@ export const useDependencyAnalyzer = () => {
         };
         
         setDependencies(prev => new Map(prev).set(packageName, errorNode));
-      } finally {
-        setLoading(false);
       }
     };
     
-    loadPackage();
+    loadPackageAndDependencies();
   }, [dependencies, showDevDependencies]);
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
