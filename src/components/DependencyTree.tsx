@@ -223,8 +223,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
                 <span className="text-sm">
                   {name}@{version}
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 ml-2">
-                    dev
+                  <span className="inline-flex items-center rounded-md bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 inset-ring inset-ring-purple-700/10">
+                    devDependency
                   </span>
                 </span>
               </div>
