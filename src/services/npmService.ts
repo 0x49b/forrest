@@ -1,6 +1,6 @@
 import { PackageJson } from '../types';
 
-const NPM_REGISTRY_BASE = 'https://cors-anywhere.herokuapp.com/https://registry.npmjs.org';
+const NPM_REGISTRY_BASE = 'https://registry.npmjs.org';
 
 export const fetchPackageJson = async (packageName: string, version?: string): Promise<PackageJson> => {
   try {
