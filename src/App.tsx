@@ -45,7 +45,6 @@ function App() {
         showDevDependencies,
         analyzeDependencies,
         loadPackageDependencies,
-        addToBreadcrumbs,
         toggleDevDependencies,
         reset
     } = useDependencyAnalyzer();
@@ -60,7 +59,8 @@ function App() {
     }, [analyzeDependencies, initialShowDevDependencies]);
 
     const handlePackageClick = useCallback((packageName: string, version: string) => {
-        addToBreadcrumbs(packageName, version);
+        // Package click functionality can be implemented later if needed
+        console.log(`Clicked on package: ${packageName}@${version}`);
     }, [addToBreadcrumbs]);
 
     const handleLoadDependencies = useCallback((packageName: string) => {
