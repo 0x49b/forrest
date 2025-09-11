@@ -251,7 +251,6 @@ function App() {
                   dependencies={dependencies} 
                   rootPackage={packageData.name}
                   showDevDependencies={showDevDependencies}
-                  referenceCount={referenceCount}
                 />
               )}
             </div>
