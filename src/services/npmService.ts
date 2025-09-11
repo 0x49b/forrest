@@ -160,7 +160,7 @@ const findBestMatch = (availableVersions: string[], targetVersion: string): stri
 
   // Sort versions in descending order
   const sortedVersions = availableVersions
-    .filter(v => /^\d+\.\d+\.\d+/.test(v)) // Only consider semantic versions
+    .filter(v => /^\d+\.\d+\.\d+(?:-[\w\d\.-]+)?/.test(v)) // Include pre-release versions
     .sort(compareVersions)
     .reverse();
   
@@ -192,7 +192,8 @@ const findBestMatch = (availableVersions: string[], targetVersion: string): stri
 };
 
 const parseVersion = (version: string): [number, number, number] | null => {
-  const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  // Handle pre-release versions like 1.2.3-alpha.1, 1.2.3-rc.0
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-[\w\d\.-]+)?/);
   if (!match) return null;
   
   return [

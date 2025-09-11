@@ -24,8 +24,8 @@ interface GraphNode {
 }
 
 interface GraphEdge {
-  from: string;
-  to: string;
+  source: string;
+  target: string;
   isDevDependency: boolean;
 }
 
@@ -136,7 +136,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
       // Regular dependencies
       Object.keys(depNode.dependencies || {}).forEach(depName => {
         if (nodeMap.has(depName)) {
-          edgeList.push({ from: name, to: depName, isDevDependency: false });
+          edgeList.push({ source: name, target: depName, isDevDependency: false });
         }
       });
       
@@ -144,13 +144,13 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
       if (showDevDependencies) {
         Object.keys(depNode.devDependencies || {}).forEach(depName => {
           if (nodeMap.has(depName)) {
-            edgeList.push({ from: name, to: depName, isDevDependency: true });
+            edgeList.push({ source: name, target: depName, isDevDependency: true });
             // Mark target node as dev dependency if it's only reached through dev deps
             const targetNode = nodeMap.get(depName);
             if (targetNode && !targetNode.isRoot) {
               // Check if this node is only reachable through dev dependencies
               const hasRegularPath = edgeList.some(edge => 
-                edge.to === depName && !edge.isDevDependency
+                edge.target === depName && !edge.isDevDependency
               );
               if (!hasRegularPath) {
                 nodeMap.set(depName, { ...targetNode, isDevDependency: true });
@@ -272,22 +272,10 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
       );
     
     // Add circles to nodes
-    node.append("circle")
-      .attr("r", d => d.radius)
-      .attr("fill", d => {
-        if (d.isRoot) return "#3b82f6";
-        if (selectedNode === d.id) return "#10b981";
-        if (d.isDevDependency) return "#f97316";
-        return "#6366f1";
-      })
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 2)
-      .on("click", (event, d) => {
-        event.stopPropagation();
-        setSelectedNode(d.id === selectedNode ? null : d.id);
-      });
-    
-    // Add reference count badges for nodes with references
+      .attr("x1", d => d.source.x)
+      .attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x)
+      .attr("y2", d => d.target.y);
     node.filter(d => d.referenceCount > 0 && !d.isRoot)
       .append("circle")
       .attr("r", 8)
