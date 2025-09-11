@@ -36,7 +36,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
     ...(showDevDependencies ? node.devDependencies : {})
   };
   const hasChildren = allDeps && Object.keys(allDeps).length > 0;
-  const canLoadDependencies = !node.loaded && !node.loading;
+  const canLoadDependencies = !node.childrenLoaded && !node.loading;
   const isExpanded = expanded.has(node.name);
   const indent = level * 24;
 
@@ -57,7 +57,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
     e.stopPropagation();
     console.log(`handlePackageClick event: ${e} and ${node.name} `);
     // Load dependencies if not loaded
-    if (!node.loaded && !node.loading) {
+    if (!node.childrenLoaded && !node.loading) {
       onLoadDependencies(node.name);
     }
     onPackageClick(node.name, node.version);
@@ -122,21 +122,21 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             {node.description && (
               <p className="text-xs text-slate-600 truncate mt-1">{node.description}</p>
             )}
-            {node.hasNoDependencies && !showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
+            {node.childrenLoaded && node.hasNoDependencies && !showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
               <p className="text-xs text-slate-500 italic mt-1">
                 No dependencies • {Object.keys(node.devDependencies).length} dev deps available
               </p>
             )}
-            {node.hasNoDependencies && !showDevDependencies && (!node.devDependencies || Object.keys(node.devDependencies).length === 0) && (
+            {node.childrenLoaded && node.hasNoDependencies && !showDevDependencies && (!node.devDependencies || Object.keys(node.devDependencies).length === 0) && (
               <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
             )}
-            {node.hasNoDependencies && showDevDependencies && (
+            {node.childrenLoaded && node.hasNoDependencies && showDevDependencies && (
               <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
             )}
           </div>
         </div>
         
-        {hasChildren && !node.loading && (
+        {hasChildren && node.childrenLoaded && !node.loading && (
           <span className="text-xs text-slate-500 ml-2">
             {Object.keys(node.dependencies || {}).length} deps
             {showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
@@ -151,7 +151,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         )}
       </div>
 
-      {hasChildren && isExpanded && (
+      {hasChildren && isExpanded && node.childrenLoaded && (
         <div className="border-l border-slate-200 ml-4">
           {Object.entries(allDeps!).map(([name, version]) => {
             const childNode = dependencies.get(name);

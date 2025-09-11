@@ -19,7 +19,7 @@ const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, 
         const node = dependencies.get(currentName);
         if (!node) return false;
 
-        // Check if target is in regular dependencies
+        // Check if target is in regular dependencies and children are loaded
         if (node.dependencies?.[targetName]) return true;
 
         // Recursively check regular dependencies

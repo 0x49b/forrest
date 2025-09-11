@@ -45,6 +45,7 @@ export const useDependencyAnalyzer = () => {
                 devDependencies: packageData.devDependencies || {},
                 loaded: true,
                 loading: false,
+                childrenLoaded: false,
                 homepage: packageData.homepage,
                 repository: packageData.repository,
                 hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
@@ -104,6 +105,7 @@ export const useDependencyAnalyzer = () => {
                 devDependencies: {},
                 loaded: true, // Mark as loaded to prevent retry attempts
                 loading: false,
+                childrenLoaded: false,
                 hasNoDependencies: true
             };
 
@@ -214,6 +216,7 @@ export const useDependencyAnalyzer = () => {
             devDependencies: packageJson.devDependencies || {},
             loaded: true,
             loading: false,
+            childrenLoaded: true, // Root package children are loaded initially
             homepage: packageJson.homepage,
             repository: packageJson.repository,
             hasNoDependencies: !packageJson.dependencies || Object.keys(packageJson.dependencies).length === 0
@@ -245,10 +248,19 @@ export const useDependencyAnalyzer = () => {
         const currentNode = dependencies.get(packageName);
         console.log(`Current node:`, currentNode);
 
-        if (!currentNode || currentNode.loaded || currentNode.loading) {
-            console.log(`Skipping load for ${packageName}: loaded=${currentNode?.loaded}, loading=${currentNode?.loading}`);
+        if (!currentNode || currentNode.childrenLoaded || currentNode.loading) {
+            console.log(`Skipping load for ${packageName}: childrenLoaded=${currentNode?.childrenLoaded}, loading=${currentNode?.loading}`);
             return;
         }
+
+        // Set loading state and show progress
+        setLoading(true);
+        setProgress({
+            current: 0,
+            total: 1,
+            currentPackage: packageName,
+            level: 1
+        });
 
         // Mark as loading
         setDependencies(prev => {
@@ -264,7 +276,24 @@ export const useDependencyAnalyzer = () => {
         const loadPackageAndDependencies = async () => {
             try {
                 console.log(`Loading dependencies for ${packageName}@${currentNode.version}`);
-                const packageData = await fetchPackageJson(packageName, currentNode.version);
+                
+                let packageData;
+                if (currentNode.loaded) {
+                    // If the node is already loaded, we just need to load its children
+                    packageData = {
+                        name: currentNode.name,
+                        version: currentNode.version,
+                        description: currentNode.description,
+                        dependencies: currentNode.dependencies || {},
+                        devDependencies: currentNode.devDependencies || {},
+                        homepage: currentNode.homepage,
+                        repository: currentNode.repository,
+                        license: currentNode.license
+                    };
+                } else {
+                    // Load the package data from npm
+                    packageData = await fetchPackageJson(packageName, currentNode.version);
+                }
 
                 const dependencyNode: DependencyNode = {
                     name: packageName,
@@ -274,6 +303,7 @@ export const useDependencyAnalyzer = () => {
                     devDependencies: packageData.devDependencies || {},
                     loaded: true,
                     loading: false,
+                    childrenLoaded: true,
                     homepage: packageData.homepage,
                     repository: packageData.repository,
                     hasNoDependencies: (!packageData.dependencies || Object.keys(packageData.dependencies).length === 0) &&
@@ -288,6 +318,13 @@ export const useDependencyAnalyzer = () => {
                 const childDevDeps = showDevDependencies ? Object.entries(packageData.devDependencies || {}) : [];
                 const allChildDeps = [...childDeps, ...childDevDeps];
 
+                // Update progress
+                setProgress({
+                    current: 1,
+                    total: 1,
+                    currentPackage: packageName,
+                    level: 1
+                });
                 if (allChildDeps.length > 0) {
                     setDependencies(prev => {
                         const newMap = new Map(prev);
@@ -302,6 +339,7 @@ export const useDependencyAnalyzer = () => {
                                     devDependencies: {},
                                     loaded: false,
                                     loading: false,
+                                    childrenLoaded: false,
                                     hasNoDependencies: false
                                 };
                                 newMap.set(depName, childNode);
@@ -325,10 +363,17 @@ export const useDependencyAnalyzer = () => {
                     devDependencies: {},
                     loaded: true,
                     loading: false,
+                    childrenLoaded: true,
+                    childrenLoaded: false,
+                    childrenLoaded: false,
                     hasNoDependencies: true
                 };
 
                 setDependencies(prev => new Map(prev).set(packageName, errorNode));
+            } finally {
+                // Hide loading state
+                setLoading(false);
+                setProgress({current: 0, total: 0, currentPackage: '', level: 0});
             }
         };
 

@@ -26,6 +26,7 @@ export interface DependencyNode {
     license?: string;
     loaded: boolean;
     loading: boolean;
+    childrenLoaded: boolean;
     hasNoDependencies?: boolean;
 }
 
