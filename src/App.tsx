@@ -1,7 +1,7 @@
 import React from 'react';
 import {LoadingProgress} from '../types';
-import {workerPool} from '../services/workerPool';
-import {workerPool} from '../services/workerPool';
+import {workerPool} from './services/workerPool';
+
 
 interface ProgressBarProps {
     progress: LoadingProgress;
@@ -9,9 +9,7 @@ interface ProgressBarProps {
 
 export const ProgressBar: React.FC<ProgressBarProps> = ({progress}) => {
     const workerStats = workerPool.getStats();
-    
-    const workerStats = workerPool.getStats();
-    
+      
     // Progress bar is now integrated into the package info div
     return (
         <div className="bg-blue-50 rounded-lg border border-blue-200 p-4 min-w-[280px]">
