@@ -41,6 +41,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const indent = level * 24;
 
   const handleToggle = () => {
+
+      console.log(`handleToggle for ${node.name}`);
+
     if (hasChildren || canLoadDependencies) {
       if (canLoadDependencies) {
         console.log(`Loading dependencies for ${node.name}`);
@@ -52,6 +55,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
   const handlePackageClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    console.log(`handlePackageClick event: ${e} and ${node.name} `);
     // Load dependencies if not loaded
     if (!node.loaded && !node.loading) {
       onLoadDependencies(node.name);
@@ -61,6 +65,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
   const handleExternalClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+
+    console.log(`handleExternalClick event: ${e} and ${node.name} `);
+
     if (node.homepage || node.repository?.url) {
       const url = node.homepage || node.repository?.url;
       if (url) {
@@ -85,9 +92,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
           ) : hasChildren || canLoadDependencies ? (
             isExpanded ? (
-              <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
+              <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0"/>
             ) : (
-              <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
+              <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0"/>
             )
           ) : (
             <div className="w-4 h-4 flex-shrink-0" />
@@ -154,9 +161,10 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               return (
                 <div key={`${name}-${level}`} className={isDevDep ? 'opacity-75' : ''}>
                   {isDevDep && (
-                    <div className="text-xs text-orange-600 px-4 py-1" style={{ paddingLeft: `${40 + indent}px` }}>
-                      dev dependency
-                    </div>
+
+                          <div className="text-xs text-orange-600 px-4 py-1" style={{paddingLeft: `${40 + indent}px`}}>
+                              dev dependency
+                          </div>
                   )}
                   <TreeNode
                     node={childNode}
