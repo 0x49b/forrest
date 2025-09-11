@@ -335,6 +335,7 @@ export const useDependencyAnalyzer = () => {
   return {
     packageData,
     dependencies,
+    referenceCount,
     loading,
     error,
     progress,
