@@ -272,10 +272,6 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({ dependencies, root
       );
     
     // Add circles to nodes
-      .attr("x1", d => d.source.x)
-      .attr("y1", d => d.source.y)
-      .attr("x2", d => d.target.x)
-      .attr("y2", d => d.target.y);
     node.filter(d => d.referenceCount > 0 && !d.isRoot)
       .append("circle")
       .attr("r", 8)
