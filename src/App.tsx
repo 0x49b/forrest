@@ -158,10 +158,6 @@ function App() {
                                     <h2 className="text-xl font-semibold text-slate-900">{packageData.name}</h2>
                                     <p className="text-slate-600">{packageData.version}</p>
                                 </div>
-                                {/* Loading Progress */}
-                                {loading && (
-                                    <ProgressBar progress={progress}/>
-                                )}
                             </div>
                             {packageData.description && (
                                 <p className="text-slate-700 mb-4">{packageData.description}</p>
@@ -196,6 +192,13 @@ function App() {
                                 </div>
                             </div>
                         </div>
+
+                        {/* Loading Progress - Fixed Position */}
+                        {loading && (
+                            <div className="fixed top-20 right-6 z-40">
+                                <ProgressBar progress={progress}/>
+                            </div>
+                        )}
 
                         {/* Error Display */}
                         {error && (
