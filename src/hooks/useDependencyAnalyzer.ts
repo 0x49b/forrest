@@ -20,7 +20,7 @@ export const useDependencyAnalyzer = () => {
   const [allDiscoveredDependencies, setAllDiscoveredDependencies] = useState<Set<string>>(new Set());
   
   const MAX_CONCURRENT_REQUESTS = 10;
-  const MAX_DEPENDENCY_LEVELS = 2; // Configure max depth here - change this to adjust levels
+  const MAX_DEPENDENCY_LEVELS = 2; // Hard limit to prevent infinite recursion
 
   const loadSingleDependency = useCallback(async (packageName: string, version: string, level: number) => {
     const requestId = `${packageName}@${version}`;
@@ -77,7 +77,8 @@ export const useDependencyAnalyzer = () => {
             const depId = `${dep.name}@${dep.version}`;
             return !completedDependencies.has(depId) && 
                    !pendingDependencies.some(p => p.name === dep.name) &&
-                   !dependencies.has(dep.name);
+                   !dependencies.has(dep.name) &&
+                   dep.level <= MAX_DEPENDENCY_LEVELS; // Extra safety check
           });
         
         if (newDeps.length > 0) {
@@ -244,6 +245,12 @@ export const useDependencyAnalyzer = () => {
     const currentNode = dependencies.get(packageName);
     if (!currentNode || currentNode.loaded || currentNode.loading) return;
 
+    // Check if we're at max depth by looking at breadcrumbs
+    if (breadcrumbs.length >= MAX_DEPENDENCY_LEVELS) {
+      console.log(`Skipping ${packageName} - max depth reached`);
+      return;
+    }
+
     // Mark as loading
     setDependencies(prev => {
       const newMap = new Map(prev);
@@ -254,17 +261,17 @@ export const useDependencyAnalyzer = () => {
       return newMap;
     });
 
-    // Add to pending dependencies if not already processed
+    // Add to pending dependencies with level based on breadcrumb depth
     const workerId = `${packageName}@${currentNode.version}`;
     if (!completedDependencies.has(workerId)) {
       setPendingDependencies(prev => [...prev, {
         name: packageName,
         version: currentNode.version,
-        level: 1
+        level: breadcrumbs.length
       }]);
       setTotalDependenciesToLoad(prev => prev + 1);
     }
-  }, [dependencies, completedDependencies]);
+  }, [dependencies, completedDependencies, breadcrumbs.length, MAX_DEPENDENCY_LEVELS]);
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
     setBreadcrumbs(prev => {
