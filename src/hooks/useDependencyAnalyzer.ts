@@ -78,7 +78,7 @@ export const useDependencyAnalyzer = () => {
             return !completedDependencies.has(depId) && 
                    !pendingDependencies.some(p => p.name === dep.name) &&
                    !dependencies.has(dep.name) &&
-                   dep.level <= MAX_DEPENDENCY_LEVELS; // Extra safety check
+                   dep.level < MAX_DEPENDENCY_LEVELS; // Changed to < to prevent loading at max level
           });
         
         if (newDeps.length > 0) {
@@ -245,9 +245,45 @@ export const useDependencyAnalyzer = () => {
     const currentNode = dependencies.get(packageName);
     if (!currentNode || currentNode.loaded || currentNode.loading) return;
 
-    // Check if we're at max depth by looking at breadcrumbs
-    if (breadcrumbs.length >= MAX_DEPENDENCY_LEVELS) {
-      console.log(`Skipping ${packageName} - max depth reached`);
+    // Calculate current depth by finding the package in the dependency tree
+    const calculateDepth = (targetPackage: string): number => {
+      const visited = new Set<string>();
+      
+      const findDepth = (currentPackage: string, depth: number): number => {
+        if (visited.has(currentPackage) || depth > MAX_DEPENDENCY_LEVELS) return -1;
+        visited.add(currentPackage);
+        
+        if (currentPackage === targetPackage) return depth;
+        
+        const node = dependencies.get(currentPackage);
+        if (!node) return -1;
+        
+        // Check in regular dependencies
+        for (const depName of Object.keys(node.dependencies || {})) {
+          const result = findDepth(depName, depth + 1);
+          if (result !== -1) return result;
+        }
+        
+        // Check in dev dependencies if enabled
+        if (showDevDependencies) {
+          for (const depName of Object.keys(node.devDependencies || {})) {
+            const result = findDepth(depName, depth + 1);
+            if (result !== -1) return result;
+          }
+        }
+        
+        return -1;
+      };
+      
+      if (!packageData) return MAX_DEPENDENCY_LEVELS;
+      return findDepth(packageData.name, 0);
+    };
+    
+    const currentDepth = calculateDepth(packageName);
+    
+    // Prevent loading if we're at or beyond max depth
+    if (currentDepth >= MAX_DEPENDENCY_LEVELS) {
+      console.log(`Skipping ${packageName} - max depth reached (depth: ${currentDepth})`);
       return;
     }
 
@@ -267,11 +303,11 @@ export const useDependencyAnalyzer = () => {
       setPendingDependencies(prev => [...prev, {
         name: packageName,
         version: currentNode.version,
-        level: breadcrumbs.length
+        level: currentDepth + 1
       }]);
       setTotalDependenciesToLoad(prev => prev + 1);
     }
-  }, [dependencies, completedDependencies, breadcrumbs.length, MAX_DEPENDENCY_LEVELS]);
+  }, [dependencies, completedDependencies, packageData, showDevDependencies, MAX_DEPENDENCY_LEVELS]);
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
     setBreadcrumbs(prev => {
