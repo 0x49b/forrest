@@ -44,14 +44,16 @@ export const loadDependency = createAsyncThunk(
         homepage: packageData.homepage,
         repository: packageData.repository,
         license: packageData.license,
-        hasNoDependencies: (!packageData.dependencies || Object.keys(packageData.dependencies).length === 0) &&
-          (!showDevDeps || !packageData.devDependencies || Object.keys(packageData.devDependencies).length === 0)
+        hasNoDependencies: false // Will be calculated after children are processed
       };
 
       // Prepare child dependencies
       const childDeps = Object.entries(packageData.dependencies || {});
       const childDevDeps = showDevDeps ? Object.entries(packageData.devDependencies || {}) : [];
       const allChildDeps = [...childDeps, ...childDevDeps];
+
+      // Set hasNoDependencies based on actual children that will be shown
+      dependencyNode.hasNoDependencies = allChildDeps.length === 0;
 
       const childNodes: Record<string, DependencyNode> = {};
       allChildDeps.forEach(([depName, depVersion]) => {
@@ -146,6 +148,9 @@ const dependencySlice = createSlice({
           };
         }
       });
+      
+      // Update root node's hasNoDependencies flag
+      state.nodes[action.payload.name].hasNoDependencies = Object.keys(allDeps).length === 0;
     },
     
     setNodeLoading: (state, action: PayloadAction<{ packageName: string; loading: boolean }>) => {
@@ -170,27 +175,40 @@ const dependencySlice = createSlice({
     toggleDevDependencies: (state) => {
       state.showDevDependencies = !state.showDevDependencies;
       
-      // If enabling dev dependencies, add them to existing loaded nodes
-      if (state.showDevDependencies && state.packageData) {
+      // Reset childrenLoaded for all nodes so they can be reloaded with new dev dependency setting
+      Object.values(state.nodes).forEach(node => {
+        if (node.loaded) {
+          node.childrenLoaded = false;
+          
+          // Recalculate hasNoDependencies based on new showDevDependencies setting
+          const regularDeps = Object.keys(node.dependencies || {}).length;
+          const devDeps = state.showDevDependencies ? Object.keys(node.devDependencies || {}).length : 0;
+          node.hasNoDependencies = (regularDeps + devDeps) === 0;
+        }
+      });
+      
+      // Remove nodes that are no longer relevant
+      if (!state.showDevDependencies) {
+        const nodesToKeep: Record<string, DependencyNode> = {};
+        const rootNode = state.packageData?.name;
+        
+        // Keep root node
+        if (rootNode && state.nodes[rootNode]) {
+          nodesToKeep[rootNode] = state.nodes[rootNode];
+        }
+        
+        // Keep nodes that are regular dependencies
         Object.values(state.nodes).forEach(node => {
-          if (node.loaded && node.childrenLoaded && node.devDependencies) {
-            Object.entries(node.devDependencies).forEach(([depName, depVersion]) => {
-              if (!state.nodes[depName]) {
-                state.nodes[depName] = {
-                  name: depName,
-                  version: depVersion,
-                  description: undefined,
-                  dependencies: {},
-                  devDependencies: {},
-                  loaded: false,
-                  loading: false,
-                  childrenLoaded: false,
-                  hasNoDependencies: false
-                };
+          if (node.loaded && node.dependencies) {
+            Object.keys(node.dependencies).forEach(depName => {
+              if (state.nodes[depName]) {
+                nodesToKeep[depName] = state.nodes[depName];
               }
             });
           }
         });
+        
+        state.nodes = nodesToKeep;
       }
     },
     
