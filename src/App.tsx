@@ -7,6 +7,7 @@ import {useDependencyAnalyzer} from './hooks/useDependencyAnalyzer';
 import {Map, Package, Settings, TreePine} from 'lucide-react';
 import packageJson from '../package.json';
 import {DependencyNode} from "./types";
+import {WorkerStats} from './components/WorkerStats';
 
 // Helper function to check if a node has a path through regular dependencies
 const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, DependencyNode>, rootName: string): boolean => {
@@ -225,6 +226,9 @@ function App() {
                     </div>
                 )}
             </main>
+            
+            {/* Worker Stats */}
+            <WorkerStats />
         </div>
     );
 }

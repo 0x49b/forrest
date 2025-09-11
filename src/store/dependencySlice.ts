@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { DependencyNode, PackageJson, LoadingProgress } from '../types';
-import { fetchPackageJson } from '../services/npmService';
+import { workerPool } from '../services/workerPool';
 
 interface DependencyState {
   nodes: Record<string, DependencyNode>;
@@ -30,53 +30,8 @@ export const loadDependency = createAsyncThunk(
     { rejectWithValue }
   ) => {
     try {
-      const packageData = await fetchPackageJson(packageName, version);
-      
-      const dependencyNode: DependencyNode = {
-        name: packageName,
-        version: packageData.version,
-        description: packageData.description,
-        dependencies: packageData.dependencies || {},
-        devDependencies: packageData.devDependencies || {},
-        loaded: true,
-        loading: false,
-        childrenLoaded: true,
-        homepage: packageData.homepage,
-        repository: packageData.repository,
-        license: packageData.license,
-        hasNoDependencies: false // Will be calculated after children are processed
-      };
-
-      // Prepare child dependencies
-      const childDeps = Object.entries(packageData.dependencies || {});
-      const childDevDeps = showDevDeps ? Object.entries(packageData.devDependencies || {}) : [];
-      const allChildDeps = [...childDeps, ...childDevDeps];
-
-      // Set hasNoDependencies based on actual children that will be shown
-      dependencyNode.hasNoDependencies = allChildDeps.length === 0;
-
-      const childNodes: Record<string, DependencyNode> = {};
-      allChildDeps.forEach(([depName, depVersion]) => {
-        if (!childNodes[depName]) {
-          childNodes[depName] = {
-            name: depName,
-            version: depVersion,
-            description: undefined,
-            dependencies: {},
-            devDependencies: {},
-            loaded: false,
-            loading: false,
-            childrenLoaded: false,
-            hasNoDependencies: false
-          };
-        }
-      });
-
-      return {
-        mainNode: dependencyNode,
-        childNodes,
-        packageName
-      };
+      const result = await workerPool.fetchDependency(packageName, version, showDevDeps);
+      return result;
     } catch (error) {
       console.warn(`Failed to load ${packageName}@${version}:`, error instanceof Error ? error.message : 'Unknown error');
       
