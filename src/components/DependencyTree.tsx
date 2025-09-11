@@ -15,6 +15,7 @@ interface TreeNodeProps {
   dependencies: Map<string, DependencyNode>;
   showDevDependencies: boolean;
   level: number;
+  isDevDependency?: boolean;
   expanded: Set<string>;
   onToggle: (key: string) => void;
   onLoadDependencies: (packageName: string) => void;
@@ -26,6 +27,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   dependencies, 
   showDevDependencies,
   level, 
+  isDevDependency = false,
   expanded, 
   onToggle, 
   onLoadDependencies, 
@@ -111,22 +113,12 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 {node.name}
               </button>
               <span className="text-xs text-slate-500 flex-shrink-0">v{node.version}</span>
-              {/* Dev dependency badge */}
-              {level > 0 && (() => {
-                // Check if this node is a dev dependency of its parent
-                const parentName = Object.keys(dependencies).find(depName => {
-                  const dep = dependencies.get(depName);
-                  return dep?.devDependencies?.[node.name] && showDevDependencies;
-                });
-                const parent = parentName ? dependencies.get(parentName) : null;
-                const isDevDep = parent?.devDependencies?.[node.name];
-                
-                return isDevDep ? (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 flex-shrink-0">
-                    dev
-                  </span>
-                ) : null;
-              })()}
+              {/* Dev dependency badge - pass parent info to determine if this is a dev dep */}
+              {level > 0 && isDevDependency && showDevDependencies && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 flex-shrink-0">
+                  dev
+                </span>
+              )}
               <button
                 onClick={handleExternalClick}
                 className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-slate-400 hover:text-blue-600 transition-all"
@@ -169,7 +161,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
       {hasChildren && isExpanded && node.childrenLoaded && (
         <div className="border-l border-slate-200 ml-4">
-          {Object.entries(allDeps!).map(([name, version]) => {
+          {Object.entries(node.dependencies || {}).map(([name, version]) => {
             const childNode = dependencies.get(name);
             
             if (childNode) {
@@ -180,6 +172,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                     dependencies={dependencies}
                     showDevDependencies={showDevDependencies}
                     level={level + 1}
+                    isDevDependency={false}
                     expanded={expanded}
                     onToggle={onToggle}
                     onLoadDependencies={onLoadDependencies}
@@ -188,7 +181,6 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 </div>
               );
             }
-            const isDevDep = showDevDependencies && node.devDependencies?.[name];
             return (
               <div
                 key={`${name}-${level}-loading`}
@@ -198,11 +190,42 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
                 <span className="text-sm">
                   {name}@{version}
-                  {isDevDep && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 ml-2">
-                      dev
-                    </span>
-                  )}
+                </span>
+              </div>
+            );
+          })}
+          {showDevDependencies && Object.entries(node.devDependencies || {}).map(([name, version]) => {
+            const childNode = dependencies.get(name);
+            
+            if (childNode) {
+              return (
+                <div key={`${name}-${level}`}>
+                  <TreeNode
+                    node={childNode}
+                    dependencies={dependencies}
+                    showDevDependencies={showDevDependencies}
+                    level={level + 1}
+                    isDevDependency={true}
+                    expanded={expanded}
+                    onToggle={onToggle}
+                    onLoadDependencies={onLoadDependencies}
+                    onPackageClick={onPackageClick}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div
+                key={`${name}-${level}-loading`}
+                className="flex items-center py-2 px-4 text-slate-500"
+                style={{ paddingLeft: `${40 + indent}px` }}
+              >
+                <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
+                <span className="text-sm">
+                  {name}@{version}
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 ml-2">
+                    dev
+                  </span>
                 </span>
               </div>
             );
@@ -284,6 +307,7 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
             dependencies={dependencies}
             showDevDependencies={showDevDependencies}
             level={0}
+            isDevDependency={false}
             expanded={expanded}
             onToggle={handleToggle}
             onLoadDependencies={onLoadDependencies}
