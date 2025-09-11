@@ -90,15 +90,15 @@ export const useDependencyAnalyzer = () => {
       setCompletedDependencies(prev => new Set(prev).add(requestId));
       
     } catch (error) {
-      console.warn(`Failed to load ${packageName}@${version}:`, error);
+      console.warn(`Failed to load ${packageName}@${version}:`, error instanceof Error ? error.message : 'Unknown error');
       
       const errorNode: DependencyNode = {
         name: packageName,
         version: version,
-        description: `Failed to load: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        description: `Not resolved: ${error instanceof Error ? error.message : 'Package not found'}`,
         dependencies: {},
         devDependencies: {},
-        loaded: false,
+        loaded: true, // Mark as loaded to prevent retry attempts
         loading: false,
         hasNoDependencies: true
       };
