@@ -28,7 +28,7 @@ export const useDependencyAnalyzer = () => {
     if (completedDependencies.has(requestId)) {
       return;
     }
-
+    
     setActiveRequests(prev => prev + 1);
     
     try {
