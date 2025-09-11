@@ -22,6 +22,13 @@ export const useDependencyAnalyzer = () => {
   const MAX_CONCURRENT_REQUESTS = 10;
   const MAX_DEPENDENCY_LEVELS = 2; // Hard limit to prevent infinite recursion
 
+  const loadSingleDependency = useCallback(async (packageName: string, version: string, level: number) => {
+    const requestId = `${packageName}@${version}`;
+    
+    if (completedDependencies.has(requestId)) {
+      return;
+    }
+
     setActiveRequests(prev => prev + 1);
     
     try {
@@ -102,6 +109,7 @@ export const useDependencyAnalyzer = () => {
     } finally {
       setActiveRequests(prev => prev - 1);
     }
+  }, [completedDependencies, pendingDependencies, dependencies, showDevDependencies, MAX_DEPENDENCY_LEVELS]);
 
   // Process pending dependencies with worker limit
   const processPendingDependencies = useCallback(() => {
@@ -290,13 +298,6 @@ export const useDependencyAnalyzer = () => {
     
     loadPackage();
   }, [dependencies, showDevDependencies]);
-
-  const loadSingleDependency = useCallback(async (packageName: string, version: string, level: number) => {
-    const requestId = `${packageName}@${version}`;
-    
-    if (completedDependencies.has(requestId)) {
-      return;
-    }
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
     setBreadcrumbs(prev => {
