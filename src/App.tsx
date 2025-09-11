@@ -50,6 +50,7 @@ function App() {
     addToBreadcrumbs,
     toggleDevDependencies,
     reset 
+  } = useDependencyAnalyzer();
 
   const handlePackageJsonSubmit = useCallback((content: string) => {
     try {
@@ -250,6 +251,7 @@ function App() {
                   dependencies={dependencies} 
                   rootPackage={packageData.name}
                   showDevDependencies={showDevDependencies}
+                  referenceCount={referenceCount}
                 />
               )}
             </div>
