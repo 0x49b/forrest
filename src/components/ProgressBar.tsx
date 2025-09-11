@@ -1,11 +1,14 @@
 import React from 'react';
 import {LoadingProgress} from '../types';
+import {workerPool} from '../services/workerPool';
 
 interface ProgressBarProps {
     progress: LoadingProgress;
 }
 
 export const ProgressBar: React.FC<ProgressBarProps> = ({progress}) => {
+    const workerStats = workerPool.getStats();
+    
     // Progress bar is now integrated into the package info div
     return (
         <div className="bg-blue-50 rounded-lg border border-blue-200 p-4 min-w-[280px]">
@@ -40,6 +43,26 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({progress}) => {
                     <span>Progress:</span>
                     <span
                         className="font-medium">{Math.round(Math.min((progress.current / progress.total) * 100, 100))}%</span>
+                </div>
+                <div className="pt-2 border-t border-blue-300">
+                    <div className="flex items-center justify-between">
+                        <span>Workers:</span>
+                        <span className="font-medium">{workerStats.totalWorkers}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <span>Active:</span>
+                        <span className="font-medium text-green-600">{workerStats.activeRequests}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <span>Available:</span>
+                        <span className="font-medium text-blue-600">{workerStats.availableWorkers}</span>
+                    </div>
+                    {workerStats.queuedTasks > 0 && (
+                        <div className="flex items-center justify-between">
+                            <span>Queued:</span>
+                            <span className="font-medium text-orange-600">{workerStats.queuedTasks}</span>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
