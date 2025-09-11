@@ -159,7 +159,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             
             if (childNode) {
               return (
-                <div key={`${name}-${level}`} className={isDevDep ? 'opacity-75' : ''}>
+                <div key={`${name}-${level}`}>
                   {isDevDep && (
 
                           <div className="text-xs text-orange-600 px-4 py-1" style={{paddingLeft: `${40 + indent}px`}}>
