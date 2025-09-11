@@ -22,13 +22,6 @@ export const useDependencyAnalyzer = () => {
   const MAX_CONCURRENT_REQUESTS = 10;
   const MAX_DEPENDENCY_LEVELS = 2; // Hard limit to prevent infinite recursion
 
-  const loadSingleDependency = useCallback(async (packageName: string, version: string, level: number) => {
-    const requestId = `${packageName}@${version}`;
-    
-    if (completedDependencies.has(requestId)) {
-      return;
-    }
-    
     setActiveRequests(prev => prev + 1);
     
     try {
@@ -109,7 +102,6 @@ export const useDependencyAnalyzer = () => {
     } finally {
       setActiveRequests(prev => prev - 1);
     }
-  }, [completedDependencies, pendingDependencies, dependencies, showDevDependencies, MAX_DEPENDENCY_LEVELS]);
 
   // Process pending dependencies with worker limit
   const processPendingDependencies = useCallback(() => {
@@ -245,15 +237,6 @@ export const useDependencyAnalyzer = () => {
     const currentNode = dependencies.get(packageName);
     if (!currentNode || currentNode.loaded || currentNode.loading) return;
 
-    // Simple depth check: if we already have 2 levels loaded, don't load more
-    // Level 0: root package, Level 1: direct deps, Level 2: deps of deps
-    const currentDepth = breadcrumbs.length - 1;
-    
-    if (currentDepth >= MAX_DEPENDENCY_LEVELS) {
-      console.log(`Skipping ${packageName} - max depth reached (breadcrumb depth: ${currentDepth})`);
-      return;
-    }
-
     // Mark as loading
     setDependencies(prev => {
       const newMap = new Map(prev);
@@ -264,17 +247,56 @@ export const useDependencyAnalyzer = () => {
       return newMap;
     });
 
-    // Add to pending dependencies with level based on breadcrumb depth
-    const workerId = `${packageName}@${currentNode.version}`;
-    if (!completedDependencies.has(workerId)) {
-      setPendingDependencies(prev => [...prev, {
-        name: packageName,
-        version: currentNode.version,
-        level: currentDepth
-      }]);
-      setTotalDependenciesToLoad(prev => prev + 1);
+    // Load dependencies immediately
+    const loadPackage = async () => {
+      try {
+        setLoading(true);
+        const packageData = await fetchPackageJson(packageName, currentNode.version);
+        
+        const dependencyNode: DependencyNode = {
+          name: packageName,
+          version: packageData.version,
+          description: packageData.description,
+          dependencies: packageData.dependencies || {},
+          devDependencies: packageData.devDependencies || {},
+          loaded: true,
+          loading: false,
+          homepage: packageData.homepage,
+          repository: packageData.repository,
+          hasNoDependencies: !packageData.dependencies || Object.keys(packageData.dependencies).length === 0
+        };
+        
+        setDependencies(prev => new Map(prev).set(packageName, dependencyNode));
+        
+      } catch (error) {
+        console.warn(`Failed to load ${packageName}@${currentNode.version}:`, error instanceof Error ? error.message : 'Unknown error');
+        
+        const errorNode: DependencyNode = {
+          name: packageName,
+          version: currentNode.version,
+          description: `Not resolved: ${error instanceof Error ? error.message : 'Package not found'}`,
+          dependencies: {},
+          devDependencies: {},
+          loaded: true,
+          loading: false,
+          hasNoDependencies: true
+        };
+        
+        setDependencies(prev => new Map(prev).set(packageName, errorNode));
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadPackage();
+  }, [dependencies, showDevDependencies]);
+
+  const loadSingleDependency = useCallback(async (packageName: string, version: string, level: number) => {
+    const requestId = `${packageName}@${version}`;
+    
+    if (completedDependencies.has(requestId)) {
+      return;
     }
-  }, [dependencies, completedDependencies, breadcrumbs.length, MAX_DEPENDENCY_LEVELS]);
 
   const addToBreadcrumbs = useCallback((packageName: string, version: string) => {
     setBreadcrumbs(prev => {
