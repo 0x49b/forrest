@@ -242,8 +242,14 @@ export const useDependencyAnalyzer = () => {
   }, []);
 
   const loadDependencies = useCallback((packageName: string) => {
+    console.log(`Hook: loadDependencies called for ${packageName}`);
     const currentNode = dependencies.get(packageName);
-    if (!currentNode || currentNode.loaded || currentNode.loading) return;
+    console.log(`Current node:`, currentNode);
+    
+    if (!currentNode || currentNode.loaded || currentNode.loading) {
+      console.log(`Skipping load for ${packageName}: loaded=${currentNode?.loaded}, loading=${currentNode?.loading}`);
+      return;
+    }
 
     // Mark as loading
     setDependencies(prev => {
