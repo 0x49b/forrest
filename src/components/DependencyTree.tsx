@@ -43,6 +43,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const handleToggle = () => {
     if (hasChildren || canLoadDependencies) {
       if (canLoadDependencies) {
+        console.log(`Loading dependencies for ${node.name}`);
         onLoadDependencies(node.name);
       }
       onToggle(node.name);

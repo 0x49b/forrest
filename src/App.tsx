@@ -65,6 +65,11 @@ function App() {
     addToBreadcrumbs(packageName, version);
   }, [addToBreadcrumbs]);
 
+  const handleLoadDependencies = useCallback((packageName: string) => {
+    console.log(`App: Loading dependencies for ${packageName}`);
+    loadPackageDependencies(packageName);
+  }, [loadPackageDependencies]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Progress Bar */}
@@ -243,7 +248,7 @@ function App() {
                   dependencies={dependencies} 
                   rootPackage={packageData.name}
                   showDevDependencies={showDevDependencies}
-                  onLoadDependencies={loadPackageDependencies}
+                  onLoadDependencies={handleLoadDependencies}
                   onPackageClick={handlePackageClick}
                 />
               ) : (
