@@ -61,7 +61,7 @@ function App() {
     const handlePackageClick = useCallback((packageName: string, version: string) => {
         // Package click functionality can be implemented later if needed
         console.log(`Clicked on package: ${packageName}@${version}`);
-    }, [addToBreadcrumbs]);
+    }, []);
 
     const handleLoadDependencies = useCallback((packageName: string) => {
         console.log(`App: Loading dependencies for ${packageName}`);
