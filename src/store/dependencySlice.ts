@@ -362,7 +362,7 @@ const dependencySlice = createSlice({
         state.loading = false;
         state.error = action.payload as string || 'Failed to load initial levels';
         state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
-      });
+      })
       .addCase(loadDependency.rejected, (state, action) => {
         const payload = action.payload as any;
         
