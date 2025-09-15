@@ -14,6 +14,7 @@ export const PackageJsonInput: React.FC<PackageJsonInputProps> = ({
                                                                   }) => {
     const [content, setContent] = useState('');
     const [error, setError] = useState('');
+    const [loadInitialLevels, setLoadInitialLevels] = useState(2);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -86,6 +87,26 @@ export const PackageJsonInput: React.FC<PackageJsonInputProps> = ({
                     />
                 </div>
 
+                {/* Initial Levels Loading */}
+                <div
+                    className="flex items-center justify-between p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <div>
+                        <h3 className="text-sm font-medium text-slate-700">Auto-load Dependency Levels</h3>
+                        <p className="text-xs text-slate-500 mt-1">Automatically load dependencies up to the specified level</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <select
+                            value={loadInitialLevels}
+                            onChange={(e) => setLoadInitialLevels(parseInt(e.target.value))}
+                            className="px-3 py-1 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                            <option value={0}>Manual loading only</option>
+                            <option value={1}>Load 1 level</option>
+                            <option value={2}>Load 2 levels</option>
+                            <option value={3}>Load 3 levels</option>
+                        </select>
+                    </div>
+                </div>
                 {error && (
                     <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                         <p className="text-red-800 text-sm">{error}</p>

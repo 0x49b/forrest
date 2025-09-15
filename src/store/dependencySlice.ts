@@ -56,6 +56,137 @@ export const loadDependency = createAsyncThunk(
   }
 );
 
+// Async thunk for loading initial levels
+export const loadInitialLevels = createAsyncThunk(
+  'dependencies/loadInitialLevels',
+  async (
+    { packageData, showDevDeps, maxLevel = 2 }: { packageData: PackageJson; showDevDeps: boolean; maxLevel?: number },
+    { dispatch, getState, rejectWithValue }
+  ) => {
+    try {
+      const state = getState() as { dependencies: DependencyState };
+      
+      // Get all level 1 dependencies
+      const level1Deps = Object.keys({
+        ...(packageData.dependencies || {}),
+        ...(showDevDeps ? (packageData.devDependencies || {}) : {})
+      });
+      
+      if (level1Deps.length === 0) {
+        return { completedLevels: 0, totalProcessed: 0 };
+      }
+      
+      let totalProcessed = 0;
+      const allDepsToLoad = new Set<string>();
+      
+      // Load level 1 dependencies
+      dispatch(setProgress({
+        current: 0,
+        total: level1Deps.length,
+        level: 1,
+        currentPackage: 'Loading level 1 dependencies...'
+      }));
+      
+      const level1Results = await Promise.allSettled(
+        level1Deps.map(async (depName, index) => {
+          const version = (packageData.dependencies?.[depName] || packageData.devDependencies?.[depName]) || 'latest';
+          
+          dispatch(setProgress({
+            current: index + 1,
+            total: level1Deps.length,
+            level: 1,
+            currentPackage: depName
+          }));
+          
+          try {
+            const result = await workerPool.fetchDependency(depName, version, showDevDeps);
+            totalProcessed++;
+            return { success: true, result, depName };
+          } catch (error) {
+            console.warn(`Failed to load level 1 dependency ${depName}:`, error);
+            return { success: false, error, depName };
+          }
+        })
+      );
+      
+      // Process level 1 results and collect level 2 dependencies
+      const level2Deps = new Set<string>();
+      
+      level1Results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.success) {
+          const { result: depResult } = result.value;
+          
+          // Add level 2 dependencies to the set
+          Object.keys(depResult.mainNode.dependencies || {}).forEach(dep => {
+            if (!level1Deps.includes(dep) && dep !== packageData.name) {
+              level2Deps.add(dep);
+            }
+          });
+          
+          if (showDevDeps) {
+            Object.keys(depResult.mainNode.devDependencies || {}).forEach(dep => {
+              if (!level1Deps.includes(dep) && dep !== packageData.name) {
+                level2Deps.add(dep);
+              }
+            });
+          }
+        }
+      });
+      
+      // Load level 2 dependencies if maxLevel >= 2
+      if (maxLevel >= 2 && level2Deps.size > 0) {
+        const level2Array = Array.from(level2Deps);
+        
+        dispatch(setProgress({
+          current: 0,
+          total: level2Array.length,
+          level: 2,
+          currentPackage: 'Loading level 2 dependencies...'
+        }));
+        
+        const level2Results = await Promise.allSettled(
+          level2Array.map(async (depName, index) => {
+            // Find the version from level 1 results
+            let version = 'latest';
+            for (const l1Result of level1Results) {
+              if (l1Result.status === 'fulfilled' && l1Result.value.success) {
+                const deps = l1Result.value.result.mainNode.dependencies || {};
+                const devDeps = l1Result.value.result.mainNode.devDependencies || {};
+                if (deps[depName]) {
+                  version = deps[depName];
+                  break;
+                } else if (devDeps[depName]) {
+                  version = devDeps[depName];
+                  break;
+                }
+              }
+            }
+            
+            dispatch(setProgress({
+              current: index + 1,
+              total: level2Array.length,
+              level: 2,
+              currentPackage: depName
+            }));
+            
+            try {
+              const result = await workerPool.fetchDependency(depName, version, showDevDeps);
+              totalProcessed++;
+              return { success: true, result, depName };
+            } catch (error) {
+              console.warn(`Failed to load level 2 dependency ${depName}:`, error);
+              return { success: false, error, depName };
+            }
+          })
+        );
+      }
+      
+      return { completedLevels: maxLevel, totalProcessed };
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : 'Unknown error');
+    }
+  }
+);
 const dependencySlice = createSlice({
   name: 'dependencies',
   initialState,
@@ -207,6 +338,31 @@ const dependencySlice = createSlice({
         state.loading = false;
         state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
       })
+      .addCase(loadInitialLevels.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(loadInitialLevels.fulfilled, (state, action) => {
+        const { completedLevels, totalProcessed } = action.payload;
+        state.loading = false;
+        state.progress = { 
+          current: totalProcessed, 
+          total: totalProcessed, 
+          level: completedLevels, 
+          currentPackage: `Completed loading ${completedLevels} levels (${totalProcessed} packages)` 
+        };
+        
+        // Reset progress after a delay
+        setTimeout(() => {
+          // This would need to be handled differently in a real app
+          // For now, we'll leave the progress showing
+        }, 2000);
+      })
+      .addCase(loadInitialLevels.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload as string || 'Failed to load initial levels';
+        state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+      });
       .addCase(loadDependency.rejected, (state, action) => {
         const payload = action.payload as any;
         

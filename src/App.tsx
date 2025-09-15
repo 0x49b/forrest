@@ -53,7 +53,7 @@ function App() {
     const handlePackageJsonSubmit = useCallback((content: string) => {
         try {
             const parsed = JSON.parse(content);
-            analyzeDependencies(parsed, initialShowDevDependencies);
+            analyzeDependencies(parsed, initialShowDevDependencies, 2); // Load 2 levels by default
         } catch (err) {
             console.error('Invalid JSON:', err);
         }

@@ -26,7 +26,7 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({progress}) => {
             <div className="space-y-1 text-xs text-blue-700">
                 <div className="flex items-center justify-between">
                     <span>Level:</span>
-                    <span className="font-medium">{Math.min(progress.level, 2)}/2</span>
+                    <span className="font-medium">{progress.level}/3</span>
                 </div>
                 {progress.currentPackage && (
                     <div className="flex items-center justify-between">
