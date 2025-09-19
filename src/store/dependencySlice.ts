@@ -10,6 +10,7 @@ interface DependencyState {
   error: string | null;
   progress: LoadingProgress;
   showDevDependencies: boolean;
+  activeWorkers: number;
 }
 
 const initialState: DependencyState = {
@@ -20,6 +21,7 @@ const initialState: DependencyState = {
   error: null,
   progress: { current: 0, total: 0, level: 0, currentPackage: '' },
   showDevDependencies: false,
+  activeWorkers: 0,
 };
 
 // Async thunk for loading a single dependency
@@ -170,6 +172,10 @@ export const loadInitialLevels = createAsyncThunk(
               }
             }
             
+            dispatch(incrementActiveWorkers());
+            
+            dispatch(incrementActiveWorkers());
+            
             dispatch(setProgress({
               current: index + 1,
               total: level2Array.length,
@@ -179,15 +185,21 @@ export const loadInitialLevels = createAsyncThunk(
             
             try {
               const result = await workerPool.fetchDependency(depName, version, showDevDeps);
+              dispatch(decrementActiveWorkers());
+              dispatch(decrementActiveWorkers());
               totalProcessed++;
               return { success: true, result, depName };
             } catch (error) {
+              dispatch(decrementActiveWorkers());
+              dispatch(decrementActiveWorkers());
               console.warn(`Failed to load level 2 dependency ${depName}:`, error);
               return { success: false, error, depName };
             }
           })
         );
        
+        state.activeWorkers = Math.max(0, state.activeWorkers - 1);
+        
        // Process level 2 results and add them to the store
        level2Results.forEach((result) => {
          if (result.status === 'fulfilled' && result.value.success) {
@@ -275,6 +287,18 @@ const dependencySlice = createSlice({
       state.progress = action.payload;
     },
     
+    setActiveWorkers: (state, action: PayloadAction<number>) => {
+      state.activeWorkers = action.payload;
+    },
+    
+    incrementActiveWorkers: (state) => {
+      state.activeWorkers += 1;
+    },
+    
+    decrementActiveWorkers: (state) => {
+      state.activeWorkers = Math.max(0, state.activeWorkers - 1);
+    },
+    
     setError: (state, action: PayloadAction<string | null>) => {
       state.error = action.payload;
     },
@@ -326,7 +350,9 @@ const dependencySlice = createSlice({
     reset: () => initialState,
     
     clearProgressMessage: (state) => {
-      state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+      if (state.activeWorkers === 0) {
+        state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+      }
     },
   },
   
@@ -336,6 +362,7 @@ const dependencySlice = createSlice({
         const { packageName } = action.meta.arg;
         state.loading = true;
         state.error = null;
+        state.activeWorkers += 1;
         state.progress = {
           current: 0,
           total: 1,
@@ -350,6 +377,8 @@ const dependencySlice = createSlice({
       .addCase(loadDependency.fulfilled, (state, action) => {
         const { mainNode, childNodes } = action.payload;
         
+        state.activeWorkers = Math.max(0, state.activeWorkers - 1);
+        
         // Update the main node
         state.nodes[mainNode.name] = mainNode;
         
@@ -360,8 +389,11 @@ const dependencySlice = createSlice({
           }
         });
         
-        state.loading = false;
-        state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+        // Only stop loading when no active workers remain
+        if (state.activeWorkers === 0) {
+          state.loading = false;
+          state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+        }
       })
       .addCase(loadInitialLevels.pending, (state) => {
         state.loading = true;
@@ -397,8 +429,11 @@ const dependencySlice = createSlice({
           state.error = payload.error;
         }
         
-        state.loading = false;
-        state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+        // Only stop loading when no active workers remain
+        if (state.activeWorkers === 0) {
+          state.loading = false;
+          state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+        }
      })
      // Handle individual dependency loads from loadInitialLevels
      .addMatcher(
@@ -427,6 +462,9 @@ export const {
   setNodeLoading,
   setLoading,
   setProgress,
+  setActiveWorkers,
+  incrementActiveWorkers,
+  decrementActiveWorkers,
   setError,
   toggleDevDependencies,
   setShowDevDependencies,
