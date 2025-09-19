@@ -153,6 +153,8 @@ function App() {
                             onSubmit={handlePackageJsonSubmit}
                             showDevDependencies={initialShowDevDependencies}
                             onToggleDevDependencies={setInitialShowDevDependencies}
+                            loadInitialLevels={initialLoadLevels}
+                            onLoadInitialLevelsChange={setInitialLoadLevels}
                         />
                     </div>
                 ) : (
