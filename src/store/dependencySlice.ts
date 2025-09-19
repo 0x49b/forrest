@@ -200,6 +200,11 @@ export const loadInitialLevels = createAsyncThunk(
       return { completedLevels: maxLevel, totalProcessed };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Unknown error');
+    } finally {
+      // Clear progress message after a delay
+      setTimeout(() => {
+        dispatch(clearProgressMessage());
+      }, 3000);
     }
   }
 );
@@ -319,6 +324,10 @@ const dependencySlice = createSlice({
     },
     
     reset: () => initialState,
+    
+    clearProgressMessage: (state) => {
+      state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+    },
   },
   
   extraReducers: (builder) => {
@@ -422,6 +431,7 @@ export const {
   toggleDevDependencies,
   setShowDevDependencies,
   reset,
+  clearProgressMessage,
 } = dependencySlice.actions;
 
 export default dependencySlice.reducer;
