@@ -37,6 +37,7 @@ const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, 
 function App() {
     const [view, setView] = useState<'tree' | 'map'>('tree');
     const [initialShowDevDependencies, setInitialShowDevDependencies] = useState(true);
+   const [initialLoadLevels, setInitialLoadLevels] = useState(2);
     const [treeExpandedState, setTreeExpandedState] = useState<Set<string>>(new Set());
     const {
         packageData,
@@ -54,11 +55,10 @@ function App() {
     const handlePackageJsonSubmit = useCallback((content: string) => {
         try {
             const parsed = JSON.parse(content);
-            analyzeDependencies(parsed, initialShowDevDependencies, 2); // Load 2 levels by default
+           analyzeDependencies(parsed, initialShowDevDependencies, initialLoadLevels);
         } catch (err) {
             console.error('Invalid JSON:', err);
         }
-    }, [analyzeDependencies, initialShowDevDependencies]);
 
     const handlePackageClick = useCallback((packageName: string, version: string) => {
         // Package click functionality can be implemented later if needed
@@ -153,6 +153,8 @@ function App() {
                             onSubmit={handlePackageJsonSubmit}
                             showDevDependencies={initialShowDevDependencies}
                             onToggleDevDependencies={setInitialShowDevDependencies}
+                           loadInitialLevels={initialLoadLevels}
+                           onLoadInitialLevelsChange={setInitialLoadLevels}
                         />
                     </div>
                 ) : (

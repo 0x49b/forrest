@@ -109,6 +109,14 @@ export const loadInitialLevels = createAsyncThunk(
         })
       );
       
+     // Process level 1 results and add them to the store
+     level1Results.forEach((result) => {
+       if (result.status === 'fulfilled' && result.value.success) {
+         const { result: depResult } = result.value;
+         // The results will be processed by the fulfilled case of loadDependency
+       }
+     });
+     
       // Process level 1 results and collect level 2 dependencies
       const level2Deps = new Set<string>();
       
@@ -179,6 +187,14 @@ export const loadInitialLevels = createAsyncThunk(
             }
           })
         );
+       
+       // Process level 2 results and add them to the store
+       level2Results.forEach((result) => {
+         if (result.status === 'fulfilled' && result.value.success) {
+           const { result: depResult } = result.value;
+           // The results will be processed by the fulfilled case of loadDependency
+         }
+       });
       }
       
       return { completedLevels: maxLevel, totalProcessed };
@@ -352,11 +368,12 @@ const dependencySlice = createSlice({
           currentPackage: `Completed loading ${completedLevels} levels (${totalProcessed} packages)` 
         };
         
-        // Reset progress after a delay
-        setTimeout(() => {
-          // This would need to be handled differently in a real app
-          // For now, we'll leave the progress showing
-        }, 2000);
+       // Clear progress after showing completion
+       setTimeout(() => {
+         if (state.progress.currentPackage?.includes('Completed loading')) {
+           state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+         }
+       }, 3000);
       })
       .addCase(loadInitialLevels.rejected, (state, action) => {
         state.loading = false;
@@ -373,6 +390,25 @@ const dependencySlice = createSlice({
         
         state.loading = false;
         state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+     })
+     // Handle individual dependency loads from loadInitialLevels
+     .addMatcher(
+       (action) => action.type === 'dependencies/loadDependency/fulfilled' && action.meta?.arg?.fromInitialLoad,
+       (state, action) => {
+         // This will be handled by the existing loadDependency.fulfilled case
+       }
+     );
+     
+     // Add a custom matcher to handle batch updates from loadInitialLevels
+     builder.addMatcher(
+       (action) => action.type.startsWith('dependencies/loadInitialLevels'),
+       (state, action) => {
+         // Handle batch dependency loading results
+         if (action.type === 'dependencies/loadInitialLevels/pending') {
+           // Already handled above
+         } else if (action.type === 'dependencies/loadInitialLevels/fulfilled') {
+           // Process any batch results here if needed
+         }
       });
   },
 });

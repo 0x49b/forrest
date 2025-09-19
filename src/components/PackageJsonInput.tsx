@@ -5,16 +5,19 @@ interface PackageJsonInputProps {
     onSubmit: (content: string) => void;
     showDevDependencies: boolean;
     onToggleDevDependencies: (show: boolean) => void;
+   loadInitialLevels: number;
+   onLoadInitialLevelsChange: (levels: number) => void;
 }
 
 export const PackageJsonInput: React.FC<PackageJsonInputProps> = ({
                                                                       onSubmit,
                                                                       showDevDependencies,
-                                                                      onToggleDevDependencies
+                                                                     onToggleDevDependencies,
+                                                                     loadInitialLevels,
+                                                                     onLoadInitialLevelsChange
                                                                   }) => {
     const [content, setContent] = useState('');
     const [error, setError] = useState('');
-    const [loadInitialLevels, setLoadInitialLevels] = useState(2);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -97,7 +100,7 @@ export const PackageJsonInput: React.FC<PackageJsonInputProps> = ({
                     <div className="flex items-center gap-3">
                         <select
                             value={loadInitialLevels}
-                            onChange={(e) => setLoadInitialLevels(parseInt(e.target.value))}
+                           onChange={(e) => onLoadInitialLevelsChange(parseInt(e.target.value))}
                             className="px-3 py-1 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                             <option value={0}>Manual loading only</option>
