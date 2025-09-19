@@ -87,8 +87,7 @@ function App() {
                                 <Package className="w-6 h-6 text-blue-600"/>
                             </div>
                             <div>
-                                <h1 className="text-2xl font-bold text-slate-900">Package Dependency
-                                    Analyzer {packageJson.version}</h1>
+                                <h1 className="text-2xl font-bold text-slate-900">Forrest Dependency Analyzer {packageJson.version}</h1>
                                 <p className="text-slate-600">Visualize and explore npm package
                                     dependencies</p>
                             </div>
