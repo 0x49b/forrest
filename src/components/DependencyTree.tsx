@@ -48,11 +48,14 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
       console.log(`handleToggle for ${node.name}`);
 
-    if (hasChildren || canLoadDependencies) {
-      if (canLoadDependencies) {
-        console.log(`Loading dependencies for ${node.name}`);
-        onLoadDependencies(node.name);
-      }
+    if (canLoadDependencies) {
+      console.log(`Loading dependencies for ${node.name}`);
+      onLoadDependencies(node.name);
+      // Don't toggle expansion state until dependencies are loaded
+      return;
+    }
+    
+    if (hasChildren) {
       onToggle(node.name);
     }
   };
