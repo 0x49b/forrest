@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronRight, ChevronDown, Package, ExternalLink, Loader2 } from 'lucide-react';
 import { DependencyNode } from '../types';
 
