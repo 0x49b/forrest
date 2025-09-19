@@ -298,7 +298,17 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
   };
 
   const handleExpandAll = () => {
-    setExpanded(new Set(Array.from(dependencies.keys())));
+    const expandableNodes = Array.from(dependencies.values())
+      .filter(node => {
+        const allDeps = {
+          ...node.dependencies,
+          ...(showDevDependencies ? node.devDependencies : {})
+        };
+        return node.loaded && node.childrenLoaded && Object.keys(allDeps).length > 0;
+      })
+      .map(node => node.name);
+    
+    setExpanded(new Set(expandableNodes));
   };
 
   const handleCollapseAll = () => {
