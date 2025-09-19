@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronRight, ChevronDown, Package, ExternalLink, Loader2 } from 'lucide-react';
 import { DependencyNode } from '../types';
+import { useAppSelector, useAppDispatch } from '../store/hooks';
+import { setShouldAutoExpand } from '../store/dependencySlice';
 
 interface DependencyTreeProps {
   dependencies: Map<string, DependencyNode>;
@@ -250,6 +252,8 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
   expandedState,
   onExpandedStateChange
 }) => {
+  const dispatch = useAppDispatch();
+  const shouldAutoExpand = useAppSelector(state => state.dependencies.shouldAutoExpand);
   const [internalExpanded, setInternalExpanded] = useState<Set<string>>(new Set([rootPackage]));
   
   // Use external state if provided, otherwise use internal state
@@ -262,6 +266,20 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
       onExpandedStateChange(new Set([rootPackage]));
     }
   }, [expandedState, rootPackage, onExpandedStateChange]);
+
+  // Auto-expand all loaded nodes after initial loading
+  useEffect(() => {
+    if (shouldAutoExpand && dependencies.size > 0) {
+      const loadedNodes = Array.from(dependencies.values())
+        .filter(node => node.loaded && node.childrenLoaded)
+        .map(node => node.name);
+      
+      if (loadedNodes.length > 0) {
+        setExpanded(new Set(loadedNodes));
+        dispatch(setShouldAutoExpand(false));
+      }
+    }
+  }, [shouldAutoExpand, dependencies, setExpanded, dispatch]);
 
   const rootNode = useMemo(() => {
     return dependencies.get(rootPackage);

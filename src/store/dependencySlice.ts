@@ -22,6 +22,7 @@ const initialState: DependencyState = {
   progress: { current: 0, total: 0, level: 0, currentPackage: '' },
   showDevDependencies: false,
   activeWorkers: 0,
+  shouldAutoExpand: false,
 };
 
 // Async thunk for loading a single dependency
@@ -291,6 +292,10 @@ const dependencySlice = createSlice({
       state.activeWorkers = action.payload;
     },
     
+    setShouldAutoExpand: (state, action: PayloadAction<boolean>) => {
+      state.shouldAutoExpand = action.payload;
+    },
+    
     incrementActiveWorkers: (state) => {
       state.activeWorkers += 1;
     },
@@ -402,6 +407,7 @@ const dependencySlice = createSlice({
       .addCase(loadInitialLevels.fulfilled, (state, action) => {
         const { completedLevels, totalProcessed } = action.payload;
         state.loading = false;
+        state.shouldAutoExpand = true;
         state.progress = { 
           current: totalProcessed, 
           total: totalProcessed, 
@@ -463,6 +469,7 @@ export const {
   setLoading,
   setProgress,
   setActiveWorkers,
+  setShouldAutoExpand,
   incrementActiveWorkers,
   decrementActiveWorkers,
   setError,

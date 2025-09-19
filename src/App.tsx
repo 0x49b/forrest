@@ -8,6 +8,8 @@ import {Map, Package, Settings, TreePine} from 'lucide-react';
 import packageJson from '../package.json';
 import {DependencyNode} from "./types";
 import {WorkerStats} from './components/WorkerStats';
+import {useAppDispatch} from './store/hooks';
+import {setShouldAutoExpand} from './store/dependencySlice';
 
 // Helper function to check if a node has a path through regular dependencies
 const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, DependencyNode>, rootName: string): boolean => {
@@ -35,6 +37,7 @@ const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, 
 };
 
 function App() {
+    const dispatch = useAppDispatch();
     const [view, setView] = useState<'tree' | 'map'>('tree');
     const [initialShowDevDependencies, setInitialShowDevDependencies] = useState(true);
     const [initialLoadLevels, setInitialLoadLevels] = useState(2);
@@ -46,6 +49,7 @@ function App() {
         error,
         progress,
         showDevDependencies,
+        shouldAutoExpand,
         analyzeDependencies,
         loadPackageDependencies,
         toggleDevDependencies,
@@ -74,6 +78,7 @@ function App() {
     const handleReset = useCallback(() => {
         reset();
         setTreeExpandedState(new Set());
+        dispatch(setShouldAutoExpand(false));
     }, [reset]);
 
     return (
