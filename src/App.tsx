@@ -37,6 +37,7 @@ const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, 
 function App() {
     const [view, setView] = useState<'tree' | 'map'>('tree');
     const [initialShowDevDependencies, setInitialShowDevDependencies] = useState(true);
+    const [treeExpandedState, setTreeExpandedState] = useState<Set<string>>(new Set());
     const {
         packageData,
         dependencies,
@@ -68,6 +69,11 @@ function App() {
         console.log(`App: Loading dependencies for ${packageName}`);
         loadPackageDependencies(packageName);
     }, [loadPackageDependencies]);
+
+    const handleReset = useCallback(() => {
+        reset();
+        setTreeExpandedState(new Set());
+    }, [reset]);
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -129,7 +135,7 @@ function App() {
                                     </button>
                                 </div>
                                 <button
-                                    onClick={reset}
+                                    onClick={handleReset}
                                     className="px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
                                 >
                                     Reset
@@ -217,6 +223,8 @@ function App() {
                                     showDevDependencies={showDevDependencies}
                                     onLoadDependencies={handleLoadDependencies}
                                     onPackageClick={handlePackageClick}
+                                    expandedState={treeExpandedState}
+                                    onExpandedStateChange={setTreeExpandedState}
                                 />
                             ) : (
                                 <DependencyMap

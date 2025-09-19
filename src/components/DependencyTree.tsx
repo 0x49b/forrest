@@ -8,6 +8,8 @@ interface DependencyTreeProps {
   showDevDependencies: boolean;
   onLoadDependencies: (packageName: string) => void;
   onPackageClick: (packageName: string, version: string) => void;
+  expandedState?: Set<string>;
+  onExpandedStateChange?: (expanded: Set<string>) => void;
 }
 
 interface TreeNodeProps {
@@ -241,9 +243,22 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
   rootPackage, 
   showDevDependencies,
   onLoadDependencies, 
-  onPackageClick 
+  onPackageClick,
+  expandedState,
+  onExpandedStateChange
 }) => {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set([rootPackage]));
+  const [internalExpanded, setInternalExpanded] = useState<Set<string>>(new Set([rootPackage]));
+  
+  // Use external state if provided, otherwise use internal state
+  const expanded = expandedState || internalExpanded;
+  const setExpanded = onExpandedStateChange || setInternalExpanded;
+  
+  // Initialize expanded state with root package if using external state and it's empty
+  useEffect(() => {
+    if (expandedState && expandedState.size === 0 && rootPackage && onExpandedStateChange) {
+      onExpandedStateChange(new Set([rootPackage]));
+    }
+  }, [expandedState, rootPackage, onExpandedStateChange]);
 
   const rootNode = useMemo(() => {
     return dependencies.get(rootPackage);
