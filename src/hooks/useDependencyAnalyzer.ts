@@ -6,6 +6,7 @@ import {
   toggleDevDependencies,
   loadDependency,
   loadInitialLevels,
+  analyzeWithBackend,
   reset,
 } from '../store/dependencySlice';
 import { PackageJson } from '../types';
@@ -20,18 +21,19 @@ export const useDependencyAnalyzer = () => {
     error,
     progress,
     showDevDependencies,
+    shouldAutoExpand,
   } = useAppSelector((state) => state.dependencies);
 
   const analyzeDependencies = useCallback((packageJson: PackageJson, includeDevDeps: boolean = true, loadInitialLevelsCount: number = 2) => {
     dispatch(setShowDevDependencies(includeDevDeps));
     dispatch(setPackageData(packageJson));
-    
-    // Load initial levels if requested
+
+    // Use backend analysis
     if (loadInitialLevelsCount > 0) {
-      dispatch(loadInitialLevels({
+      dispatch(analyzeWithBackend({
         packageData: packageJson,
         showDevDeps: includeDevDeps,
-        maxLevel: loadInitialLevelsCount
+        maxDepth: loadInitialLevelsCount
       }));
     }
   }, [dispatch]);
@@ -67,6 +69,7 @@ export const useDependencyAnalyzer = () => {
     error,
     progress,
     showDevDependencies,
+    shouldAutoExpand,
     analyzeDependencies,
     loadPackageDependencies,
     toggleDevDependencies: handleToggleDevDependencies,

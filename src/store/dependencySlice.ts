@@ -1,6 +1,7 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { DependencyNode, PackageJson, LoadingProgress } from '../types';
 import { workerPool } from '../services/workerPool';
+import { backendService } from '../services/backendService';
 
 interface DependencyState {
   nodes: Record<string, DependencyNode>;
@@ -11,6 +12,7 @@ interface DependencyState {
   progress: LoadingProgress;
   showDevDependencies: boolean;
   activeWorkers: number;
+  shouldAutoExpand: boolean;
 }
 
 const initialState: DependencyState = {
@@ -93,14 +95,14 @@ export const loadInitialLevels = createAsyncThunk(
       const level1Results = await Promise.allSettled(
         level1Deps.map(async (depName, index) => {
           const version = (packageData.dependencies?.[depName] || packageData.devDependencies?.[depName]) || 'latest';
-          
+
           dispatch(setProgress({
             current: index + 1,
             total: level1Deps.length,
             level: 1,
             currentPackage: depName
           }));
-          
+
           try {
             const result = await workerPool.fetchDependency(depName, version, showDevDeps);
             totalProcessed++;
@@ -111,14 +113,26 @@ export const loadInitialLevels = createAsyncThunk(
           }
         })
       );
-      
-     // Process level 1 results and add them to the store
-     level1Results.forEach((result) => {
-       if (result.status === 'fulfilled' && result.value.success) {
-         const { result: depResult } = result.value;
-         // The results will be processed by the fulfilled case of loadDependency
-       }
-     });
+
+      // Batch process level 1 results - collect all nodes first
+      const allLevel1Nodes: Record<string, DependencyNode> = {};
+      level1Results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.success) {
+          const { result: depResult } = result.value;
+          // Collect all nodes
+          allLevel1Nodes[depResult.mainNode.name] = depResult.mainNode;
+          Object.entries(depResult.childNodes).forEach(([name, node]) => {
+            if (!allLevel1Nodes[name]) {
+              allLevel1Nodes[name] = node;
+            }
+          });
+        }
+      });
+
+      // Single dispatch to add all level 1 nodes at once
+      if (Object.keys(allLevel1Nodes).length > 0) {
+        dispatch(addBatchDependencyNodes(allLevel1Nodes));
+      }
      
       // Process level 1 results and collect level 2 dependencies
       const level2Deps = new Set<string>();
@@ -172,44 +186,140 @@ export const loadInitialLevels = createAsyncThunk(
                 }
               }
             }
-            
-            dispatch(incrementActiveWorkers());
-            
-            dispatch(incrementActiveWorkers());
-            
+
             dispatch(setProgress({
               current: index + 1,
               total: level2Array.length,
               level: 2,
               currentPackage: depName
             }));
-            
+
             try {
               const result = await workerPool.fetchDependency(depName, version, showDevDeps);
-              dispatch(decrementActiveWorkers());
-              dispatch(decrementActiveWorkers());
               totalProcessed++;
               return { success: true, result, depName };
             } catch (error) {
-              dispatch(decrementActiveWorkers());
-              dispatch(decrementActiveWorkers());
               console.warn(`Failed to load level 2 dependency ${depName}:`, error);
               return { success: false, error, depName };
             }
           })
         );
-       
-        state.activeWorkers = Math.max(0, state.activeWorkers - 1);
-        
-       // Process level 2 results and add them to the store
-       level2Results.forEach((result) => {
-         if (result.status === 'fulfilled' && result.value.success) {
-           const { result: depResult } = result.value;
-           // The results will be processed by the fulfilled case of loadDependency
-         }
-       });
+
+        // Batch process level 2 results - collect all nodes first
+        const allLevel2Nodes: Record<string, DependencyNode> = {};
+        level2Results.forEach((result) => {
+          if (result.status === 'fulfilled' && result.value.success) {
+            const { result: depResult } = result.value;
+            // Collect all nodes
+            allLevel2Nodes[depResult.mainNode.name] = depResult.mainNode;
+            Object.entries(depResult.childNodes).forEach(([name, node]) => {
+              if (!allLevel2Nodes[name]) {
+                allLevel2Nodes[name] = node;
+              }
+            });
+          }
+        });
+
+        // Single dispatch to add all level 2 nodes at once
+        if (Object.keys(allLevel2Nodes).length > 0) {
+          dispatch(addBatchDependencyNodes(allLevel2Nodes));
+        }
+
+        // Collect level 3 dependencies if maxLevel >= 3
+        if (maxLevel >= 3) {
+          const level3Deps = new Set<string>();
+
+          level2Results.forEach((result) => {
+            if (result.status === 'fulfilled' && result.value.success) {
+              const { result: depResult } = result.value;
+
+              // Add level 3 dependencies to the set
+              Object.keys(depResult.mainNode.dependencies || {}).forEach(dep => {
+                if (!level1Deps.includes(dep) && !level2Deps.has(dep) && dep !== packageData.name) {
+                  level3Deps.add(dep);
+                }
+              });
+
+              if (showDevDeps) {
+                Object.keys(depResult.mainNode.devDependencies || {}).forEach(dep => {
+                  if (!level1Deps.includes(dep) && !level2Deps.has(dep) && dep !== packageData.name) {
+                    level3Deps.add(dep);
+                  }
+                });
+              }
+            }
+          });
+
+          // Load level 3 dependencies
+          if (level3Deps.size > 0) {
+            const level3Array = Array.from(level3Deps);
+
+            dispatch(setProgress({
+              current: 0,
+              total: level3Array.length,
+              level: 3,
+              currentPackage: 'Loading level 3 dependencies...'
+            }));
+
+            const level3Results = await Promise.allSettled(
+              level3Array.map(async (depName, index) => {
+                // Find the version from level 2 results
+                let version = 'latest';
+                for (const l2Result of level2Results) {
+                  if (l2Result.status === 'fulfilled' && l2Result.value.success) {
+                    const deps = l2Result.value.result.mainNode.dependencies || {};
+                    const devDeps = l2Result.value.result.mainNode.devDependencies || {};
+                    if (deps[depName]) {
+                      version = deps[depName];
+                      break;
+                    } else if (devDeps[depName]) {
+                      version = devDeps[depName];
+                      break;
+                    }
+                  }
+                }
+
+                dispatch(setProgress({
+                  current: index + 1,
+                  total: level3Array.length,
+                  level: 3,
+                  currentPackage: depName
+                }));
+
+                try {
+                  const result = await workerPool.fetchDependency(depName, version, showDevDeps);
+                  totalProcessed++;
+                  return { success: true, result, depName };
+                } catch (error) {
+                  console.warn(`Failed to load level 3 dependency ${depName}:`, error);
+                  return { success: false, error, depName };
+                }
+              })
+            );
+
+            // Batch process level 3 results - collect all nodes first
+            const allLevel3Nodes: Record<string, DependencyNode> = {};
+            level3Results.forEach((result) => {
+              if (result.status === 'fulfilled' && result.value.success) {
+                const { result: depResult } = result.value;
+                // Collect all nodes
+                allLevel3Nodes[depResult.mainNode.name] = depResult.mainNode;
+                Object.entries(depResult.childNodes).forEach(([name, node]) => {
+                  if (!allLevel3Nodes[name]) {
+                    allLevel3Nodes[name] = node;
+                  }
+                });
+              }
+            });
+
+            // Single dispatch to add all level 3 nodes at once
+            if (Object.keys(allLevel3Nodes).length > 0) {
+              dispatch(addBatchDependencyNodes(allLevel3Nodes));
+            }
+          }
+        }
       }
-      
+
       return { completedLevels: maxLevel, totalProcessed };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Unknown error');
@@ -221,6 +331,89 @@ export const loadInitialLevels = createAsyncThunk(
     }
   }
 );
+
+// Async thunk for backend-based analysis with SSE
+export const analyzeWithBackend = createAsyncThunk(
+  'dependencies/analyzeBackend',
+  async (
+    {
+      packageData,
+      showDevDeps,
+      maxDepth = 2,
+    }: { packageData: PackageJson; showDevDeps: boolean; maxDepth?: number },
+    { dispatch }
+  ) => {
+    try {
+      // Start analysis on backend
+      const { sessionId } = await backendService.startAnalysis(packageData, {
+        includeDevDependencies: showDevDeps,
+        maxDepth,
+        parallelWorkers: 100,
+      });
+
+      // Create SSE connection
+      const eventSource = backendService.createEventSource(sessionId);
+
+      // Handle SSE events
+      eventSource.addEventListener('progress', (e: MessageEvent) => {
+        const progress = JSON.parse(e.data);
+        dispatch(setProgress(progress));
+      });
+
+      eventSource.addEventListener('node', (e: MessageEvent) => {
+        const node: DependencyNode = JSON.parse(e.data);
+        dispatch(addBatchDependencyNodes({ [node.name]: node }));
+      });
+
+      eventSource.addEventListener('complete', (e: MessageEvent) => {
+        const data = JSON.parse(e.data);
+        console.log('Analysis complete:', data);
+        eventSource.close();
+        dispatch(setLoading(false));
+        dispatch(setShouldAutoExpand(true));
+        dispatch(setProgress({
+          current: data.totalProcessed,
+          total: data.totalProcessed,
+          level: maxDepth,
+          currentPackage: `Completed: ${data.totalProcessed} packages in ${data.duration}`
+        }));
+
+        // Clear progress after showing completion
+        setTimeout(() => {
+          dispatch(clearProgressMessage());
+        }, 3000);
+      });
+
+      eventSource.addEventListener('error', (e: MessageEvent) => {
+        try {
+          const errorData = JSON.parse(e.data);
+          console.error('Package error:', errorData);
+          dispatch(setError(`Failed to load ${errorData.package}: ${errorData.error}`));
+        } catch (parseError) {
+          console.error('Failed to parse error event:', parseError);
+        }
+      });
+
+      eventSource.onerror = (error) => {
+        console.error('SSE connection error:', error);
+        eventSource.close();
+        dispatch(setLoading(false));
+        dispatch(setError('Connection to server lost'));
+      };
+
+      return sessionId;
+    } catch (error) {
+      dispatch(setLoading(false));
+      dispatch(
+        setError(
+          error instanceof Error ? error.message : 'Unknown error occurred'
+        )
+      );
+      throw error;
+    }
+  }
+);
+
 const dependencySlice = createSlice({
   name: 'dependencies',
   initialState,
@@ -359,6 +552,29 @@ const dependencySlice = createSlice({
         state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
       }
     },
+
+    addDependencyNodes: (state, action: PayloadAction<{ mainNode: DependencyNode; childNodes: Record<string, DependencyNode> }>) => {
+      const { mainNode, childNodes } = action.payload;
+
+      // Update the main node
+      state.nodes[mainNode.name] = mainNode;
+
+      // Add child nodes
+      Object.entries(childNodes).forEach(([name, node]) => {
+        if (!state.nodes[name]) {
+          state.nodes[name] = node;
+        }
+      });
+    },
+
+    addBatchDependencyNodes: (state, action: PayloadAction<Record<string, DependencyNode>>) => {
+      const nodes = action.payload;
+
+      // Batch update all nodes at once
+      Object.entries(nodes).forEach(([name, node]) => {
+        state.nodes[name] = node;
+      });
+    },
   },
   
   extraReducers: (builder) => {
@@ -441,6 +657,22 @@ const dependencySlice = createSlice({
           state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
         }
      })
+     // Backend analysis thunk handlers (must be before addMatcher)
+     .addCase(analyzeWithBackend.pending, (state) => {
+       state.loading = true;
+       state.error = null;
+       state.progress = { current: 0, total: 0, level: 0, currentPackage: 'Starting analysis...' };
+     })
+     .addCase(analyzeWithBackend.fulfilled, (state, action) => {
+       // SSE will handle the loading state via events
+       // This just stores the session ID if needed
+       console.log('Backend analysis started with session:', action.payload);
+     })
+     .addCase(analyzeWithBackend.rejected, (state, action) => {
+       state.loading = false;
+       state.error = action.error.message || 'Failed to start backend analysis';
+       state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+     })
      // Handle individual dependency loads from loadInitialLevels
      .addMatcher(
        (action) => action.type === 'dependencies/loadDependency/fulfilled' && action.meta?.arg?.fromInitialLoad,
@@ -448,7 +680,7 @@ const dependencySlice = createSlice({
          // This will be handled by the existing loadDependency.fulfilled case
        }
      );
-     
+
      // Add a custom matcher to handle batch updates from loadInitialLevels
      builder.addMatcher(
        (action) => action.type.startsWith('dependencies/loadInitialLevels'),
@@ -477,6 +709,8 @@ export const {
   setShowDevDependencies,
   reset,
   clearProgressMessage,
+  addDependencyNodes,
+  addBatchDependencyNodes,
 } = dependencySlice.actions;
 
 export default dependencySlice.reducer;

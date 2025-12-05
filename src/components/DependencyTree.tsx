@@ -26,16 +26,16 @@ interface TreeNodeProps {
   onPackageClick: (packageName: string, version: string) => void;
 }
 
-const TreeNode: React.FC<TreeNodeProps> = ({ 
-  node, 
-  dependencies, 
+const TreeNode: React.FC<TreeNodeProps> = React.memo(({
+  node,
+  dependencies,
   showDevDependencies,
-  level, 
+  level,
   isDevDependency = false,
-  expanded, 
-  onToggle, 
-  onLoadDependencies, 
-  onPackageClick 
+  expanded,
+  onToggle,
+  onLoadDependencies,
+  onPackageClick
 }) => {
   const allDeps = {
     ...node.dependencies,
@@ -47,16 +47,16 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const indent = level * 24;
 
   const handleToggle = () => {
-
-      console.log(`handleToggle for ${node.name}`);
+    console.log(`handleToggle for ${node.name}`);
 
     if (canLoadDependencies) {
       console.log(`Loading dependencies for ${node.name}`);
       onLoadDependencies(node.name);
-      // Don't toggle expansion state until dependencies are loaded
+      // Immediately expand the node so it shows children when they load
+      onToggle(node.name);
       return;
     }
-    
+
     if (hasChildren) {
       onToggle(node.name);
     }
@@ -241,7 +241,19 @@ const TreeNode: React.FC<TreeNodeProps> = ({
       )}
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison to optimize re-renders
+  return (
+    prevProps.node.name === nextProps.node.name &&
+    prevProps.node.version === nextProps.node.version &&
+    prevProps.node.loading === nextProps.node.loading &&
+    prevProps.node.childrenLoaded === nextProps.node.childrenLoaded &&
+    prevProps.showDevDependencies === nextProps.showDevDependencies &&
+    prevProps.level === nextProps.level &&
+    prevProps.isDevDependency === nextProps.isDevDependency &&
+    prevProps.expanded.has(prevProps.node.name) === nextProps.expanded.has(nextProps.node.name)
+  );
+});
 
 export const DependencyTree: React.FC<DependencyTreeProps> = ({ 
   dependencies, 
