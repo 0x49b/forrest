@@ -38,8 +38,8 @@ func main() {
 	sseManager := sse.NewManager()
 
 	// Initialize handlers
-	analyzeHandler := handler.NewAnalyzeHandler(analyzerService, sseManager)
-	sseHandler := handler.NewSSEHandler(sseManager)
+	analyzeHandler := handler.NewAnalyzeHandler(sseManager)
+	sseHandler := handler.NewSSEHandler(sseManager, analyzerService)
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{

@@ -3,68 +3,82 @@ package sse
 import (
 	"forrest/backend/pkg/models"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-// Manager handles SSE session management
+// sessionTTL is how long a pending session is kept before it expires
+// if the SSE client never connects.
+const sessionTTL = 60 * time.Second
+
+type pendingSession struct {
+	request   models.AnalyzeRequest
+	createdAt time.Time
+}
+
+// Manager stores pending analyze requests keyed by session ID until the
+// SSE client connects and consumes them.
 type Manager struct {
-	sessions map[string]chan models.Event
-	mu       sync.RWMutex
+	sessions map[string]*pendingSession
+	mu       sync.Mutex
 }
 
-// NewManager creates a new SSE manager
+// NewManager creates a new session manager and starts the background
+// cleanup goroutine.
 func NewManager() *Manager {
-	return &Manager{
-		sessions: make(map[string]chan models.Event),
+	m := &Manager{
+		sessions: make(map[string]*pendingSession),
 	}
+	go m.cleanupLoop()
+	return m
 }
 
-// CreateSession creates a new SSE session
-func (m *Manager) CreateSession() string {
+// CreateSession stores the request and returns a new session ID.
+func (m *Manager) CreateSession(req models.AnalyzeRequest) string {
 	sessionID := uuid.New().String()
 
 	m.mu.Lock()
-	m.sessions[sessionID] = make(chan models.Event, 100)
+	m.sessions[sessionID] = &pendingSession{
+		request:   req,
+		createdAt: time.Now(),
+	}
 	m.mu.Unlock()
 
 	return sessionID
 }
 
-// GetSession retrieves a session channel
-func (m *Manager) GetSession(sessionID string) (chan models.Event, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	ch, exists := m.sessions[sessionID]
-	return ch, exists
-}
-
-// CloseSession closes and removes a session
-func (m *Manager) CloseSession(sessionID string) {
+// ConsumeSession atomically retrieves and removes a session. Returns
+// false if the session does not exist or has expired.
+func (m *Manager) ConsumeSession(sessionID string) (models.AnalyzeRequest, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if ch, exists := m.sessions[sessionID]; exists {
-		close(ch)
-		delete(m.sessions, sessionID)
+	s, exists := m.sessions[sessionID]
+	if !exists {
+		return models.AnalyzeRequest{}, false
 	}
+	delete(m.sessions, sessionID)
+
+	if time.Since(s.createdAt) > sessionTTL {
+		return models.AnalyzeRequest{}, false
+	}
+
+	return s.request, true
 }
 
-// SendEvent sends an event to a session
-func (m *Manager) SendEvent(sessionID string, event models.Event) bool {
-	m.mu.RLock()
-	ch, exists := m.sessions[sessionID]
-	m.mu.RUnlock()
+func (m *Manager) cleanupLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-	if !exists {
-		return false
-	}
-
-	select {
-	case ch <- event:
-		return true
-	default:
-		return false
+	for range ticker.C {
+		m.mu.Lock()
+		now := time.Now()
+		for id, s := range m.sessions {
+			if now.Sub(s.createdAt) > sessionTTL {
+				delete(m.sessions, id)
+			}
+		}
+		m.mu.Unlock()
 	}
 }
