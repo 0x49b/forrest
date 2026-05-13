@@ -6,31 +6,33 @@ import (
 	"forrest/backend/pkg/models"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Analyzer coordinates dependency analysis
+// Analyzer coordinates dependency analysis.
 type Analyzer struct {
 	workerPool *WorkerPool
 }
 
-// NewAnalyzer creates a new analyzer
+// NewAnalyzer creates a new analyzer.
 func NewAnalyzer(workerPool *WorkerPool) *Analyzer {
 	return &Analyzer{workerPool: workerPool}
 }
 
-// Analyze performs dependency analysis and streams events
+// Analyze performs dependency analysis and streams events on the
+// returned channel. The channel is closed when analysis finishes or
+// when the supplied context is cancelled.
 func (a *Analyzer) Analyze(ctx context.Context, req models.AnalyzeRequest) <-chan models.Event {
-	events := make(chan models.Event, 100)
+	events := make(chan models.Event, 256)
 
 	go func() {
 		defer close(events)
 
-		log.Printf("[ANALYZER] Starting analysis for package: %s", req.PackageJSON.Name)
+		log.Printf("[ANALYZER] Starting analysis for %s", req.PackageJSON.Name)
 		startTime := time.Now()
-		totalProcessed := 0
+		var totalProcessed int64
 
-		// Prepare root dependencies
 		rootDeps := make(map[string]string)
 		for k, v := range req.PackageJSON.Dependencies {
 			rootDeps[k] = v
@@ -41,24 +43,28 @@ func (a *Analyzer) Analyze(ctx context.Context, req models.AnalyzeRequest) <-cha
 			}
 		}
 
-		log.Printf("[ANALYZER] Root dependencies: %d (includeDevDeps: %v)", len(rootDeps), req.IncludeDevDependencies)
+		log.Printf("[ANALYZER] Root deps: %d (includeDevDeps=%v)", len(rootDeps), req.IncludeDevDependencies)
 
-		// Track dependencies by level
-		levelDeps := make(map[int]map[string]string)
-		levelDeps[1] = rootDeps
+		// Track packages we've already enqueued across all levels so we
+		// never fetch the same package twice (avoids work and
+		// duplicate node events).
+		seen := make(map[string]struct{})
+		for name := range rootDeps {
+			seen[name] = struct{}{}
+		}
 
-		// Process each level
+		levelDeps := map[int]map[string]string{1: rootDeps}
+
 		for level := 1; level <= req.MaxDepth; level++ {
 			deps := levelDeps[level]
 			if len(deps) == 0 {
-				log.Printf("[ANALYZER] Level %d: No dependencies to process, stopping", level)
+				log.Printf("[ANALYZER] Level %d: nothing to process, stopping", level)
 				break
 			}
 
-			log.Printf("[ANALYZER] Level %d: Processing %d dependencies", level, len(deps))
+			log.Printf("[ANALYZER] Level %d: processing %d deps", level, len(deps))
 
-			// Send initial progress
-			events <- models.Event{
+			if !sendEvent(ctx, events, models.Event{
 				Type: models.EventTypeProgress,
 				Data: models.ProgressData{
 					Current:        0,
@@ -66,105 +72,130 @@ func (a *Analyzer) Analyze(ctx context.Context, req models.AnalyzeRequest) <-cha
 					Level:          level,
 					CurrentPackage: fmt.Sprintf("Loading level %d dependencies...", level),
 				},
+			}) {
+				return
 			}
 
-			// Process dependencies in parallel
 			nextLevelDeps := make(map[string]string)
-			var mu sync.Mutex
+			var nextMu sync.Mutex
+			var completed int64
 			var wg sync.WaitGroup
 
-			current := 0
 			for depName, depVersion := range deps {
-				wg.Add(1)
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 
-				go func(name, version string, idx int) {
+				wg.Add(1)
+				go func(name, version string) {
 					defer wg.Done()
 
-					log.Printf("[ANALYZER] Level %d: Fetching %s@%s", level, name, version)
-
-					// Fetch package
 					node, err := a.workerPool.FetchPackage(ctx, name, version)
 					if err != nil {
-						log.Printf("[ANALYZER] Level %d: ERROR fetching %s@%s: %v", level, name, version, err)
-						events <- models.Event{
+						if ctx.Err() != nil {
+							return
+						}
+						log.Printf("[ANALYZER] Level %d: error fetching %s@%s: %v", level, name, version, err)
+						sendEvent(ctx, events, models.Event{
 							Type: models.EventTypeError,
 							Data: models.ErrorData{
 								Package: name,
 								Error:   err.Error(),
 							},
-						}
+						})
+						// Still count as completed for progress purposes
+						c := atomic.AddInt64(&completed, 1)
+						sendEvent(ctx, events, models.Event{
+							Type: models.EventTypeProgress,
+							Data: models.ProgressData{
+								Current:        int(c),
+								Total:          len(deps),
+								Level:          level,
+								CurrentPackage: name,
+							},
+						})
 						return
 					}
 
-					log.Printf("[ANALYZER] Level %d: Successfully fetched %s@%s (deps: %d, devDeps: %d)",
-						level, name, node.Version, len(node.Dependencies), len(node.DevDependencies))
+					atomic.AddInt64(&totalProcessed, 1)
 
-					totalProcessed++
-
-					// Send node event
-					events <- models.Event{
+					if !sendEvent(ctx, events, models.Event{
 						Type:  models.EventTypeNode,
 						Data:  node,
 						Level: level,
+					}) {
+						return
 					}
 
-					// Send progress update
-					mu.Lock()
-					events <- models.Event{
+					c := atomic.AddInt64(&completed, 1)
+					if !sendEvent(ctx, events, models.Event{
 						Type: models.EventTypeProgress,
 						Data: models.ProgressData{
-							Current:        idx + 1,
+							Current:        int(c),
 							Total:          len(deps),
 							Level:          level,
 							CurrentPackage: name,
 						},
+					}) {
+						return
 					}
-					mu.Unlock()
 
-					// Collect next level dependencies
 					if level < req.MaxDepth {
-						mu.Lock()
+						nextMu.Lock()
 						for nextName, nextVer := range node.Dependencies {
-							if _, exists := nextLevelDeps[nextName]; !exists {
-								// Avoid duplicates and circular deps
+							if _, ok := seen[nextName]; !ok {
+								seen[nextName] = struct{}{}
 								nextLevelDeps[nextName] = nextVer
 							}
 						}
 						if req.IncludeDevDependencies {
 							for nextName, nextVer := range node.DevDependencies {
-								if _, exists := nextLevelDeps[nextName]; !exists {
+								if _, ok := seen[nextName]; !ok {
+									seen[nextName] = struct{}{}
 									nextLevelDeps[nextName] = nextVer
 								}
 							}
 						}
-						mu.Unlock()
+						nextMu.Unlock()
 					}
-				}(depName, depVersion, current)
-
-				current++
+				}(depName, depVersion)
 			}
 
 			wg.Wait()
-			log.Printf("[ANALYZER] Level %d: Completed - processed %d packages", level, len(deps))
 
-			// Store next level deps
+			if ctx.Err() != nil {
+				return
+			}
+
+			log.Printf("[ANALYZER] Level %d: done, found %d deps for next level", level, len(nextLevelDeps))
 			if len(nextLevelDeps) > 0 {
-				log.Printf("[ANALYZER] Level %d: Found %d dependencies for next level", level, len(nextLevelDeps))
 				levelDeps[level+1] = nextLevelDeps
 			}
 		}
 
-		// Send complete event
 		duration := time.Since(startTime)
-		log.Printf("[ANALYZER] Analysis complete - Total processed: %d, Duration: %s", totalProcessed, duration)
-		events <- models.Event{
+		log.Printf("[ANALYZER] Done: processed=%d duration=%s", atomic.LoadInt64(&totalProcessed), duration)
+		sendEvent(ctx, events, models.Event{
 			Type: models.EventTypeComplete,
 			Data: models.CompleteData{
-				TotalProcessed: totalProcessed,
+				TotalProcessed: int(atomic.LoadInt64(&totalProcessed)),
 				Duration:       duration.String(),
 			},
-		}
+		})
 	}()
 
 	return events
+}
+
+// sendEvent sends an event respecting context cancellation. Returns
+// false if the context was cancelled before the event could be sent.
+func sendEvent(ctx context.Context, events chan<- models.Event, event models.Event) bool {
+	select {
+	case events <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
