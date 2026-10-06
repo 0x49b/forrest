@@ -2,11 +2,9 @@ package analyzer
 
 import (
 	"context"
-	"fmt"
 	"forrest/backend/pkg/models"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -20,168 +18,162 @@ func NewAnalyzer(workerPool *WorkerPool) *Analyzer {
 	return &Analyzer{workerPool: workerPool}
 }
 
+// FetchNode fetches a single package and names the node after the
+// requested dependency key, so npm aliases stay addressable by the name
+// used in the parent's dependency map.
+func (a *Analyzer) FetchNode(ctx context.Context, name, spec string) (*models.DependencyNode, error) {
+	node, err := a.workerPool.FetchPackage(ctx, name, spec)
+	if err != nil {
+		return nil, err
+	}
+	if node.Name == name {
+		return node, nil
+	}
+	renamed := *node
+	renamed.Name = name
+	return &renamed, nil
+}
+
 // Analyze performs dependency analysis and streams events on the
 // returned channel. The channel is closed when analysis finishes or
 // when the supplied context is cancelled.
+//
+// Packages are fetched as soon as their parent resolves instead of
+// level by level, so one slow package never stalls the next level.
 func (a *Analyzer) Analyze(ctx context.Context, req models.AnalyzeRequest) <-chan models.Event {
 	events := make(chan models.Event, 256)
 
 	go func() {
 		defer close(events)
 
-		log.Printf("[ANALYZER] Starting analysis for %s", req.PackageJSON.Name)
+		log.Printf("[ANALYZER] Starting analysis for %s (depth=%d)", req.PackageJSON.Name, req.MaxDepth)
 		startTime := time.Now()
-		var totalProcessed int64
 
-		rootDeps := make(map[string]string)
-		for k, v := range req.PackageJSON.Dependencies {
-			rootDeps[k] = v
-		}
-		if req.IncludeDevDependencies {
-			for k, v := range req.PackageJSON.DevDependencies {
-				rootDeps[k] = v
-			}
-		}
+		var (
+			mu sync.Mutex
+			// level holds the shortest known distance from the root per
+			// package. A package can first be reached through a longer
+			// path because fetches complete in any order; when a shorter
+			// path shows up later, its children are expanded again.
+			level     = map[string]int{req.PackageJSON.Name: 0}
+			fetched   = map[string]*models.DependencyNode{}
+			total     int
+			completed int
+			processed int
+			maxLevel  int
+			wg        sync.WaitGroup
+		)
 
-		log.Printf("[ANALYZER] Root deps: %d (includeDevDeps=%v)", len(rootDeps), req.IncludeDevDependencies)
-
-		// Track packages we've already enqueued across all levels so we
-		// never fetch the same package twice (avoids work and
-		// duplicate node events).
-		seen := make(map[string]struct{})
-		for name := range rootDeps {
-			seen[name] = struct{}{}
-		}
-
-		levelDeps := map[int]map[string]string{1: rootDeps}
-
-		for level := 1; level <= req.MaxDepth; level++ {
-			deps := levelDeps[level]
-			if len(deps) == 0 {
-				log.Printf("[ANALYZER] Level %d: nothing to process, stopping", level)
-				break
-			}
-
-			log.Printf("[ANALYZER] Level %d: processing %d deps", level, len(deps))
-
-			if !sendEvent(ctx, events, models.Event{
+		// progress must be called with mu held.
+		progress := func(pkg string) models.Event {
+			return models.Event{
 				Type: models.EventTypeProgress,
 				Data: models.ProgressData{
-					Current:        0,
-					Total:          len(deps),
-					Level:          level,
-					CurrentPackage: fmt.Sprintf("Loading level %d dependencies...", level),
+					Current:        completed,
+					Total:          total,
+					Level:          maxLevel,
+					CurrentPackage: pkg,
 				},
-			}) {
+			}
+		}
+
+		var enqueue func(deps map[string]string, depth int)
+		var expand func(node *models.DependencyNode, depth int)
+		var process func(name, spec string)
+
+		// enqueue must be called with mu held.
+		enqueue = func(deps map[string]string, depth int) {
+			for name, spec := range deps {
+				known, seen := level[name]
+				if seen && known <= depth {
+					continue
+				}
+				level[name] = depth
+				if depth > maxLevel {
+					maxLevel = depth
+				}
+				if !seen {
+					total++
+					wg.Add(1)
+					go process(name, spec)
+					continue
+				}
+				// Reached through a shorter path. If it is still being
+				// fetched, process picks up the new level.
+				if node, ok := fetched[name]; ok {
+					expand(node, depth)
+				}
+			}
+		}
+
+		// expand must be called with mu held.
+		expand = func(node *models.DependencyNode, depth int) {
+			if depth >= req.MaxDepth {
 				return
 			}
-
-			nextLevelDeps := make(map[string]string)
-			var nextMu sync.Mutex
-			var completed int64
-			var wg sync.WaitGroup
-
-			for depName, depVersion := range deps {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				wg.Add(1)
-				go func(name, version string) {
-					defer wg.Done()
-
-					node, err := a.workerPool.FetchPackage(ctx, name, version)
-					if err != nil {
-						if ctx.Err() != nil {
-							return
-						}
-						log.Printf("[ANALYZER] Level %d: error fetching %s@%s: %v", level, name, version, err)
-						sendEvent(ctx, events, models.Event{
-							Type: models.EventTypeError,
-							Data: models.ErrorData{
-								Package: name,
-								Error:   err.Error(),
-							},
-						})
-						// Still count as completed for progress purposes
-						c := atomic.AddInt64(&completed, 1)
-						sendEvent(ctx, events, models.Event{
-							Type: models.EventTypeProgress,
-							Data: models.ProgressData{
-								Current:        int(c),
-								Total:          len(deps),
-								Level:          level,
-								CurrentPackage: name,
-							},
-						})
-						return
-					}
-
-					atomic.AddInt64(&totalProcessed, 1)
-
-					if !sendEvent(ctx, events, models.Event{
-						Type:  models.EventTypeNode,
-						Data:  node,
-						Level: level,
-					}) {
-						return
-					}
-
-					c := atomic.AddInt64(&completed, 1)
-					if !sendEvent(ctx, events, models.Event{
-						Type: models.EventTypeProgress,
-						Data: models.ProgressData{
-							Current:        int(c),
-							Total:          len(deps),
-							Level:          level,
-							CurrentPackage: name,
-						},
-					}) {
-						return
-					}
-
-					if level < req.MaxDepth {
-						nextMu.Lock()
-						for nextName, nextVer := range node.Dependencies {
-							if _, ok := seen[nextName]; !ok {
-								seen[nextName] = struct{}{}
-								nextLevelDeps[nextName] = nextVer
-							}
-						}
-						if req.IncludeDevDependencies {
-							for nextName, nextVer := range node.DevDependencies {
-								if _, ok := seen[nextName]; !ok {
-									seen[nextName] = struct{}{}
-									nextLevelDeps[nextName] = nextVer
-								}
-							}
-						}
-						nextMu.Unlock()
-					}
-				}(depName, depVersion)
+			enqueue(node.Dependencies, depth+1)
+			if req.IncludeDevDependencies {
+				enqueue(node.DevDependencies, depth+1)
 			}
+		}
 
-			wg.Wait()
+		process = func(name, spec string) {
+			defer wg.Done()
 
+			node, err := a.FetchNode(ctx, name, spec)
 			if ctx.Err() != nil {
 				return
 			}
 
-			log.Printf("[ANALYZER] Level %d: done, found %d deps for next level", level, len(nextLevelDeps))
-			if len(nextLevelDeps) > 0 {
-				levelDeps[level+1] = nextLevelDeps
+			mu.Lock()
+			completed++
+			var batch []models.Event
+			if err != nil {
+				log.Printf("[ANALYZER] error fetching %s@%s: %v", name, spec, err)
+				batch = append(batch, models.Event{
+					Type: models.EventTypePackageError,
+					Data: models.ErrorData{Package: name, Error: err.Error()},
+				})
+			} else {
+				processed++
+				fetched[name] = node
+				batch = append(batch, models.Event{Type: models.EventTypeNode, Data: node})
+				expand(node, level[name])
+			}
+			batch = append(batch, progress(name))
+			mu.Unlock()
+
+			for _, ev := range batch {
+				if !sendEvent(ctx, events, ev) {
+					return
+				}
 			}
 		}
 
+		mu.Lock()
+		enqueue(req.PackageJSON.Dependencies, 1)
+		if req.IncludeDevDependencies {
+			enqueue(req.PackageJSON.DevDependencies, 1)
+		}
+		start := progress("Loading dependencies...")
+		mu.Unlock()
+
+		if !sendEvent(ctx, events, start) {
+			return
+		}
+
+		wg.Wait()
+		if ctx.Err() != nil {
+			return
+		}
+
 		duration := time.Since(startTime)
-		log.Printf("[ANALYZER] Done: processed=%d duration=%s", atomic.LoadInt64(&totalProcessed), duration)
+		log.Printf("[ANALYZER] Done: processed=%d duration=%s", processed, duration)
 		sendEvent(ctx, events, models.Event{
 			Type: models.EventTypeComplete,
 			Data: models.CompleteData{
-				TotalProcessed: int(atomic.LoadInt64(&totalProcessed)),
-				Duration:       duration.String(),
+				TotalProcessed: processed,
+				Duration:       duration.Round(time.Millisecond).String(),
 			},
 		})
 	}()

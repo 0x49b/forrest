@@ -3,8 +3,10 @@ module forrest
 go 1.24.0
 
 require (
+	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/google/uuid v1.6.0
+	golang.org/x/sync v0.16.0
 )
 
 require (

@@ -1,4 +1,4 @@
-import {useCallback, useState} from 'react';
+import {useCallback, useMemo, useState} from 'react';
 import {PackageJsonInput} from './components/PackageJsonInput';
 import {DependencyTree} from './components/DependencyTree';
 import {DependencyMap} from './components/DependencyMap';
@@ -6,52 +6,49 @@ import {ProgressBar} from './components/ProgressBar';
 import {useDependencyAnalyzer} from './hooks/useDependencyAnalyzer';
 import {Map, Package, Settings, TreePine} from 'lucide-react';
 import packageJson from '../package.json';
-import {DependencyNode} from "./types";
-import {WorkerStats} from './components/WorkerStats';
-import {useAppDispatch} from './store/hooks';
-import {setShouldAutoExpand} from './store/dependencySlice';
+import {useAppSelector} from './store/hooks';
 
-// Helper function to check if a node has a path through regular dependencies
-const hasRegularDependencyPath = (targetName: string, dependencies: Map<string, DependencyNode>, rootName: string): boolean => {
-    const visited = new Set<string>();
+// Number of loaded packages, excluding packages only reachable through
+// dev dependencies when those are hidden.
+const AnalyzedCount = ({rootPackage, showDevDependencies}: { rootPackage: string; showDevDependencies: boolean }) => {
+    const nodes = useAppSelector(state => state.dependencies.nodes);
 
-    const dfs = (currentName: string): boolean => {
-        if (visited.has(currentName)) return false;
-        visited.add(currentName);
-
-        const node = dependencies.get(currentName);
-        if (!node) return false;
-
-        // Check if target is in regular dependencies and children are loaded
-        if (node.dependencies?.[targetName]) return true;
-
-        // Recursively check regular dependencies
-        for (const depName of Object.keys(node.dependencies || {})) {
-            if (dfs(depName)) return true;
+    const count = useMemo(() => {
+        const visited = new Set<string>([rootPackage]);
+        const queue = [rootPackage];
+        while (queue.length > 0) {
+            const node = nodes[queue.pop()!];
+            if (!node) continue;
+            const children = showDevDependencies
+                ? [...Object.keys(node.dependencies || {}), ...Object.keys(node.devDependencies || {})]
+                : Object.keys(node.dependencies || {});
+            for (const child of children) {
+                if (!visited.has(child)) {
+                    visited.add(child);
+                    queue.push(child);
+                }
+            }
         }
+        let loaded = 0;
+        visited.forEach(name => {
+            if (nodes[name]?.loaded) loaded++;
+        });
+        return loaded;
+    }, [nodes, rootPackage, showDevDependencies]);
 
-        return false;
-    };
-
-    return dfs(rootName);
+    return <>{count}</>;
 };
 
 function App() {
-    const dispatch = useAppDispatch();
     const [view, setView] = useState<'tree' | 'map'>('tree');
     const [initialShowDevDependencies, setInitialShowDevDependencies] = useState(true);
     const [initialLoadLevels, setInitialLoadLevels] = useState(2);
-    const [treeExpandedState, setTreeExpandedState] = useState<Set<string>>(new Set());
     const {
         packageData,
-        dependencies,
         loading,
         error,
-        progress,
         showDevDependencies,
-        shouldAutoExpand,
         analyzeDependencies,
-        loadPackageDependencies,
         toggleDevDependencies,
         reset
     } = useDependencyAnalyzer();
@@ -64,22 +61,6 @@ function App() {
             console.error('Invalid JSON:', err);
         }
     }, [analyzeDependencies, initialShowDevDependencies, initialLoadLevels]);
-
-    const handlePackageClick = useCallback((packageName: string, version: string) => {
-        // Package click functionality can be implemented later if needed
-        console.log(`Clicked on package: ${packageName}@${version}`);
-    }, []);
-
-    const handleLoadDependencies = useCallback((packageName: string) => {
-        console.log(`App: Loading dependencies for ${packageName}`);
-        loadPackageDependencies(packageName);
-    }, [loadPackageDependencies]);
-
-    const handleReset = useCallback(() => {
-        reset();
-        setTreeExpandedState(new Set());
-        dispatch(setShouldAutoExpand(false));
-    }, [reset]);
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -140,7 +121,7 @@ function App() {
                                     </button>
                                 </div>
                                 <button
-                                    onClick={handleReset}
+                                    onClick={reset}
                                     className="px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
                                 >
                                     Start over
@@ -189,18 +170,10 @@ function App() {
                                     </div>
                                     <div>
                                         <span className="text-slate-500">Total Analyzed:</span>
-                                        <span className="ml-2 font-medium">
-                      {Array.from(dependencies.values()).filter(node => {
-                          if (!showDevDependencies) {
-                              // Only count nodes that are not dev-only dependencies
-                              const rootNode = dependencies.get(packageData.name);
-                              const isInRegularDeps = rootNode?.dependencies?.[node.name];
-                              const isRoot = node.name === packageData.name;
-                              return isRoot || isInRegularDeps || hasRegularDependencyPath(node.name, dependencies, packageData.name);
-                          }
-                          return true;
-                      }).length}
-                    </span>
+                                                        <span className="ml-2 font-medium">
+                                            <AnalyzedCount rootPackage={packageData.name}
+                                                           showDevDependencies={showDevDependencies}/>
+                                        </span>
                                     </div>
                                 </div>
                             </div>
@@ -209,7 +182,7 @@ function App() {
                         {/* Loading Progress - Fixed Position */}
                         {loading && (
                             <div className="fixed top-20 right-6 z-40">
-                                <ProgressBar progress={progress}/>
+                                <ProgressBar/>
                             </div>
                         )}
 
@@ -224,29 +197,14 @@ function App() {
                         <div
                             className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
                             {view === 'tree' ? (
-                                <DependencyTree
-                                    dependencies={dependencies}
-                                    rootPackage={packageData.name}
-                                    showDevDependencies={showDevDependencies}
-                                    onLoadDependencies={handleLoadDependencies}
-                                    onPackageClick={handlePackageClick}
-                                    expandedState={treeExpandedState}
-                                    onExpandedStateChange={setTreeExpandedState}
-                                />
+                                <DependencyTree rootPackage={packageData.name}/>
                             ) : (
-                                <DependencyMap
-                                    dependencies={dependencies}
-                                    rootPackage={packageData.name}
-                                    showDevDependencies={showDevDependencies}
-                                />
+                                <DependencyMap rootPackage={packageData.name}/>
                             )}
                         </div>
                     </div>
                 )}
             </main>
-            
-            {/* Worker Stats */}
-            <WorkerStats />
         </div>
     );
 }

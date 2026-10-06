@@ -1,333 +1,223 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ChevronDown, Package, ExternalLink, Loader2 } from 'lucide-react';
 import { DependencyNode } from '../types';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
-import { setShouldAutoExpand } from '../store/dependencySlice';
+import {
+  childPath,
+  collapseAll,
+  expandAll,
+  loadDependency,
+  loadMissingChildren,
+  toggleExpanded,
+} from '../store/dependencySlice';
 
 interface DependencyTreeProps {
-  dependencies: Map<string, DependencyNode>;
   rootPackage: string;
-  showDevDependencies: boolean;
-  onLoadDependencies: (packageName: string) => void;
-  onPackageClick: (packageName: string, version: string) => void;
-  expandedState?: Set<string>;
-  onExpandedStateChange?: (expanded: Set<string>) => void;
 }
 
-interface TreeNodeProps {
-  node: DependencyNode;
-  dependencies: Map<string, DependencyNode>;
-  showDevDependencies: boolean;
+interface Row {
+  path: string;
+  name: string;
+  // Version spec from the parent, used while the node is not loaded yet.
+  spec: string;
   level: number;
-  isDevDependency?: boolean;
-  expanded: Set<string>;
-  onToggle: (key: string) => void;
-  onLoadDependencies: (packageName: string) => void;
-  onPackageClick: (packageName: string, version: string) => void;
+  isDevDependency: boolean;
+  node: DependencyNode | undefined;
+  expanded: boolean;
+  circular: boolean;
+  regularCount: number;
+  devCount: number;
 }
 
-const TreeNode: React.FC<TreeNodeProps> = React.memo(({
-  node,
-  dependencies,
-  showDevDependencies,
-  level,
-  isDevDependency = false,
-  expanded,
-  onToggle,
-  onLoadDependencies,
-  onPackageClick
-}) => {
-  const allDeps = {
-    ...node.dependencies,
-    ...(showDevDependencies ? node.devDependencies : {})
+const ROW_HEIGHT = 56;
+const OVERSCAN = 12;
+// Deeper rows are not indented further so names stay readable.
+const MAX_INDENT_LEVEL = 12;
+
+const openExternal = (url: string) => window.open(url, '_blank', 'noopener');
+
+// Flattens the visible part of the tree into rows in display order.
+const buildRows = (
+  nodes: Record<string, DependencyNode>,
+  expanded: Record<string, true>,
+  rootPackage: string,
+  showDev: boolean
+): Row[] => {
+  const rows: Row[] = [];
+  const ancestors = new Set<string>();
+
+  const visit = (name: string, spec: string, path: string, level: number, isDev: boolean) => {
+    const node = nodes[name];
+    const regular = node?.loaded ? Object.entries(node.dependencies ?? {}) : [];
+    const dev = node?.loaded && showDev ? Object.entries(node.devDependencies ?? {}) : [];
+    const circular = ancestors.has(name);
+    const isExpanded = !circular && expanded[path] === true && regular.length + dev.length > 0;
+
+    rows.push({
+      path,
+      name,
+      spec,
+      level,
+      isDevDependency: isDev,
+      node,
+      expanded: isExpanded,
+      circular,
+      regularCount: regular.length,
+      devCount: dev.length,
+    });
+
+    if (!isExpanded) return;
+    ancestors.add(name);
+    for (const [child, childSpec] of regular) visit(child, childSpec, childPath(path, child), level + 1, false);
+    const regularNames = new Set(regular.map(([child]) => child));
+    for (const [child, childSpec] of dev) {
+      // Same key scheme as childDependencies: regular entries win.
+      const segment = regularNames.has(child) ? `dev:${child}` : child;
+      visit(child, childSpec, childPath(path, segment), level + 1, true);
+    }
+    ancestors.delete(name);
   };
-  const hasChildren = allDeps && Object.keys(allDeps).length > 0;
-  const canLoadDependencies = !node.childrenLoaded && !node.loading;
-  const isExpanded = expanded.has(node.name);
-  const indent = level * 24;
 
-  const handleToggle = () => {
-    console.log(`handleToggle for ${node.name}`);
+  visit(rootPackage, nodes[rootPackage]?.version ?? '', rootPackage, 0, false);
+  return rows;
+};
 
-    if (canLoadDependencies) {
-      console.log(`Loading dependencies for ${node.name}`);
-      onLoadDependencies(node.name);
-      // Immediately expand the node so it shows children when they load
-      onToggle(node.name);
+interface TreeRowProps {
+  row: Row;
+  top: number;
+  showDevDependencies: boolean;
+  analysisRunning: boolean;
+}
+
+const TreeRow: React.FC<TreeRowProps> = React.memo(({ row, top, showDevDependencies, analysisRunning }) => {
+  const dispatch = useAppDispatch();
+  const { node, name, spec, level, path } = row;
+  const indent = 16 + Math.min(level, MAX_INDENT_LEVEL) * 24;
+  const childCount = row.regularCount + row.devCount;
+  const hasChildren = childCount > 0 && !row.circular;
+  const canLoad = (!node || (!node.loaded && !node.loading)) && !(analysisRunning && !node);
+  const pending = (!node && analysisRunning) || node?.loading;
+
+  const handleClick = useCallback(() => {
+    if (canLoad) {
+      dispatch(loadDependency({ packageName: name, version: spec }));
+      dispatch(toggleExpanded(path));
       return;
     }
-
-    if (hasChildren) {
-      onToggle(node.name);
-    }
-  };
-
-  const handlePackageClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    console.log(`handlePackageClick event: ${e} and ${node.name} `);
-    // Load dependencies if not loaded
-    if (!node.childrenLoaded && !node.loading) {
-      onLoadDependencies(node.name);
-    }
-    onPackageClick(node.name, node.version);
-  };
+    if (!hasChildren) return;
+    if (!row.expanded) dispatch(loadMissingChildren(name));
+    dispatch(toggleExpanded(path));
+  }, [canLoad, hasChildren, row.expanded, dispatch, name, spec, path]);
 
   const handleExternalClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-
-    console.log(`handleExternalClick event: ${e} and ${node.name} `);
-
-    if (node.homepage || node.repository?.url) {
-      const url = node.homepage || node.repository?.url;
-      if (url) {
-        window.open(url.replace('git+', '').replace('.git', ''), '_blank');
-      }
+    const url = node?.homepage || node?.repository?.url;
+    if (url) {
+      openExternal(url.replace('git+', '').replace(/\.git$/, ''));
     } else {
-      window.open(`https://www.npmjs.com/package/${node.name}`, '_blank');
+      openExternal(`https://www.npmjs.com/package/${name}`);
     }
   };
 
+  let subtitle = node?.description ?? '';
+  if (node?.loaded && childCount === 0) {
+    const devAvailable = Object.keys(node.devDependencies ?? {}).length;
+    const noDeps =
+      !showDevDependencies && devAvailable > 0 ? `No dependencies • ${devAvailable} dev deps available` : 'No dependencies';
+    subtitle = subtitle ? `${subtitle} • ${noDeps}` : noDeps;
+  }
+
   return (
-    <div className="select-none">
-      <div 
-        className={`flex items-center py-2 px-4 hover:bg-slate-50 transition-colors group ${
-          level === 0 ? 'bg-blue-50 border-l-4 border-blue-500' : ''
-        } ${hasChildren || canLoadDependencies ? 'cursor-pointer' : 'cursor-default'}`}
-        style={{ paddingLeft: `${16 + indent}px` }}
-        onClick={handleToggle}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          {node.loading ? (
-            <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
-          ) : hasChildren || canLoadDependencies ? (
-            isExpanded ? (
-              <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0"/>
-            ) : (
-              <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0"/>
-            )
+    <div
+      className={`absolute left-0 right-0 flex items-center px-4 hover:bg-slate-50 transition-colors group select-none ${
+        level === 0 ? 'bg-blue-50 border-l-4 border-blue-500' : 'border-l border-transparent'
+      } ${hasChildren || canLoad ? 'cursor-pointer' : 'cursor-default'}`}
+      style={{ top, height: ROW_HEIGHT, paddingLeft: indent }}
+      onClick={handleClick}
+    >
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        {pending ? (
+          <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
+        ) : hasChildren || canLoad ? (
+          row.expanded ? (
+            <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
           ) : (
-            <div className="w-4 h-4 flex-shrink-0" />
-          )}
-          
-          <Package className="w-4 h-4 text-slate-600 flex-shrink-0" />
-          
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handlePackageClick}
-                className="font-medium text-slate-900 hover:text-blue-600 truncate transition-colors text-left"
-              >
-                {node.name}
-              </button>
-              <span className="text-xs text-slate-500 flex-shrink-0">v{node.version}</span>
-              {/* Dev dependency badge - pass parent info to determine if this is a dev dep */}
-              {level > 0 && isDevDependency && showDevDependencies && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 flex-shrink-0">
-                  dev
-                </span>
-              )}
-              <button
-                onClick={handleExternalClick}
-                className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-slate-400 hover:text-blue-600 transition-all"
-                title="View on npm"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </button>
-            </div>
-            {node.description && (
-              <p className="text-xs text-slate-600 truncate mt-1">{node.description}</p>
-            )}
-            {node.childrenLoaded && node.hasNoDependencies && !showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
-              <p className="text-xs text-slate-500 italic mt-1">
-                No dependencies • {Object.keys(node.devDependencies).length} dev deps available
-              </p>
-            )}
-            {node.childrenLoaded && node.hasNoDependencies && !showDevDependencies && (!node.devDependencies || Object.keys(node.devDependencies).length === 0) && (
-              <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
-            )}
-            {node.childrenLoaded && node.hasNoDependencies && showDevDependencies && (
-              <p className="text-xs text-slate-500 italic mt-1">No dependencies</p>
-            )}
-          </div>
-        </div>
-        
-        {hasChildren && node.childrenLoaded && !node.loading && (
-          <span className="text-xs text-slate-500 ml-2">
-            {Object.keys(node.dependencies || {}).length} deps
-            {showDevDependencies && node.devDependencies && Object.keys(node.devDependencies).length > 0 && (
-              <span className="text-purple-600 ml-1">
-                +{Object.keys(node.devDependencies).length} dev
+            <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
+          )
+        ) : (
+          <div className="w-4 h-4 flex-shrink-0" />
+        )}
+
+        <Package className={`w-4 h-4 flex-shrink-0 ${node?.loaded ? 'text-slate-600' : 'text-slate-300'}`} />
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className={`font-medium truncate ${node?.loaded ? 'text-slate-900' : 'text-slate-500'}`}>{name}</span>
+            <span className="text-xs text-slate-500 flex-shrink-0">
+              {node?.loaded ? `v${node.version}` : spec}
+            </span>
+            {level > 0 && row.isDevDependency && showDevDependencies && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 flex-shrink-0">
+                dev
               </span>
             )}
-          </span>
-        )}
-        {canLoadDependencies && (
-          <span className="text-xs text-blue-600 ml-2">Click to load</span>
-        )}
+            {row.circular && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 flex-shrink-0">
+                circular
+              </span>
+            )}
+            <button
+              onClick={handleExternalClick}
+              className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-slate-400 hover:text-blue-600 transition-all"
+              title="View on npm"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </button>
+          </div>
+          {subtitle && <p className="text-xs text-slate-600 truncate mt-1">{subtitle}</p>}
+        </div>
       </div>
 
-      {hasChildren && isExpanded && node.childrenLoaded && (
-        <div className="border-l border-slate-200 ml-4">
-          {Object.entries(node.dependencies || {}).map(([name, version]) => {
-            const childNode = dependencies.get(name);
-            
-            if (childNode) {
-              return (
-                <div key={`${name}-${level}`}>
-                  <TreeNode
-                    node={childNode}
-                    dependencies={dependencies}
-                    showDevDependencies={showDevDependencies}
-                    level={level + 1}
-                    isDevDependency={false}
-                    expanded={expanded}
-                    onToggle={onToggle}
-                    onLoadDependencies={onLoadDependencies}
-                    onPackageClick={onPackageClick}
-                  />
-                </div>
-              );
-            }
-            return (
-              <div
-                key={`${name}-${level}-loading`}
-                className="flex items-center py-2 px-4 text-slate-500"
-                style={{ paddingLeft: `${40 + indent}px` }}
-              >
-                <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
-                <span className="text-sm">
-                  {name}@{version}
-                </span>
-              </div>
-            );
-          })}
-          {showDevDependencies && Object.entries(node.devDependencies || {}).map(([name, version]) => {
-            const childNode = dependencies.get(name);
-            
-            if (childNode) {
-              return (
-                <div key={`${name}-${level}`}>
-                  <TreeNode
-                    node={childNode}
-                    dependencies={dependencies}
-                    showDevDependencies={showDevDependencies}
-                    level={level + 1}
-                    isDevDependency={true}
-                    expanded={expanded}
-                    onToggle={onToggle}
-                    onLoadDependencies={onLoadDependencies}
-                    onPackageClick={onPackageClick}
-                  />
-                </div>
-              );
-            }
-            return (
-              <div
-                key={`${name}-${level}-loading`}
-                className="flex items-center py-2 px-4 text-slate-500"
-                style={{ paddingLeft: `${40 + indent}px` }}
-              >
-                <div className="w-3 h-3 border border-slate-300 border-t-transparent rounded-full animate-spin mr-3" />
-                <span className="text-sm">
-                  {name}@{version}
-                  <span className="inline-flex items-center rounded-md bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 inset-ring inset-ring-purple-700/10">
-                    devDependency
-                  </span>
-                </span>
-              </div>
-            );
-          })}
-        </div>
+      {hasChildren && !node?.loading && (
+        <span className="text-xs text-slate-500 ml-2 flex-shrink-0">
+          {row.regularCount} deps
+          {row.devCount > 0 && <span className="text-purple-600 ml-1">+{row.devCount} dev</span>}
+        </span>
       )}
+      {canLoad && <span className="text-xs text-blue-600 ml-2 flex-shrink-0">Click to load</span>}
     </div>
-  );
-}, (prevProps, nextProps) => {
-  // Custom comparison to optimize re-renders
-  return (
-    prevProps.node.name === nextProps.node.name &&
-    prevProps.node.version === nextProps.node.version &&
-    prevProps.node.loading === nextProps.node.loading &&
-    prevProps.node.childrenLoaded === nextProps.node.childrenLoaded &&
-    prevProps.showDevDependencies === nextProps.showDevDependencies &&
-    prevProps.level === nextProps.level &&
-    prevProps.isDevDependency === nextProps.isDevDependency &&
-    prevProps.expanded.has(prevProps.node.name) === nextProps.expanded.has(nextProps.node.name)
   );
 });
 
-export const DependencyTree: React.FC<DependencyTreeProps> = ({ 
-  dependencies, 
-  rootPackage, 
-  showDevDependencies,
-  onLoadDependencies, 
-  onPackageClick,
-  expandedState,
-  onExpandedStateChange
-}) => {
+export const DependencyTree: React.FC<DependencyTreeProps> = ({ rootPackage }) => {
   const dispatch = useAppDispatch();
-  const shouldAutoExpand = useAppSelector(state => state.dependencies.shouldAutoExpand);
-  const [internalExpanded, setInternalExpanded] = useState<Set<string>>(new Set([rootPackage]));
-  
-  // Use external state if provided, otherwise use internal state
-  const expanded = expandedState || internalExpanded;
-  const setExpanded = onExpandedStateChange || setInternalExpanded;
-  
-  // Initialize expanded state with root package if using external state and it's empty
+  const nodes = useAppSelector(state => state.dependencies.nodes);
+  const expanded = useAppSelector(state => state.dependencies.expanded);
+  const showDevDependencies = useAppSelector(state => state.dependencies.showDevDependencies);
+  const analysisRunning = useAppSelector(state => state.dependencies.loading);
+
+  const rows = useMemo(
+    () => buildRows(nodes, expanded, rootPackage, showDevDependencies),
+    [nodes, expanded, rootPackage, showDevDependencies]
+  );
+
+  // Only the rows inside the viewport are rendered.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
+
   useEffect(() => {
-    if (expandedState && expandedState.size === 0 && rootPackage && onExpandedStateChange) {
-      onExpandedStateChange(new Set([rootPackage]));
-    }
-  }, [expandedState, rootPackage, onExpandedStateChange]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setViewportHeight(el.clientHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
-  // Auto-expand all loaded nodes after initial loading
-  useEffect(() => {
-    if (shouldAutoExpand && dependencies.size > 0) {
-      const loadedNodes = Array.from(dependencies.values())
-        .filter(node => node.loaded && node.childrenLoaded)
-        .map(node => node.name);
-      
-      if (loadedNodes.length > 0) {
-        setExpanded(new Set(loadedNodes));
-        dispatch(setShouldAutoExpand(false));
-      }
-    }
-  }, [shouldAutoExpand, dependencies, setExpanded, dispatch]);
+  const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
 
-  const rootNode = useMemo(() => {
-    return dependencies.get(rootPackage);
-  }, [dependencies, rootPackage]);
-
-  const handleToggle = (key: string) => {
-    setExpanded(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(key)) {
-        newSet.delete(key);
-      } else {
-        newSet.add(key);
-      }
-      return newSet;
-    });
-  };
-
-  const handleExpandAll = () => {
-    const expandableNodes = Array.from(dependencies.values())
-      .filter(node => {
-        const allDeps = {
-          ...node.dependencies,
-          ...(showDevDependencies ? node.devDependencies : {})
-        };
-        return node.loaded && node.childrenLoaded && Object.keys(allDeps).length > 0;
-      })
-      .map(node => node.name);
-    
-    setExpanded(new Set(expandableNodes));
-  };
-
-  const handleCollapseAll = () => {
-    setExpanded(new Set([rootPackage]));
-  };
-
-  if (!rootNode) {
+  if (!nodes[rootPackage]) {
     return (
       <div className="p-8 text-center">
         <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
@@ -341,15 +231,17 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
       {/* Controls */}
       <div className="flex items-center justify-between p-4 border-b border-slate-200">
         <h3 className="text-lg font-medium text-slate-900">Dependency Tree</h3>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500 mr-2">{rows.length} rows</span>
           <button
-            onClick={handleExpandAll}
+            onClick={() => dispatch(expandAll())}
             className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+            title="Expands each package at its first occurrence"
           >
             Expand All
           </button>
           <button
-            onClick={handleCollapseAll}
+            onClick={() => dispatch(collapseAll())}
             className="px-3 py-1 text-sm text-slate-600 hover:bg-slate-50 rounded transition-colors"
           >
             Collapse All
@@ -358,19 +250,21 @@ export const DependencyTree: React.FC<DependencyTreeProps> = ({
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-auto">
-        <div className="group">
-          <TreeNode
-            node={rootNode}
-            dependencies={dependencies}
-            showDevDependencies={showDevDependencies}
-            level={0}
-            isDevDependency={false}
-            expanded={expanded}
-            onToggle={handleToggle}
-            onLoadDependencies={onLoadDependencies}
-            onPackageClick={onPackageClick}
-          />
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-auto"
+        onScroll={e => setScrollTop(e.currentTarget.scrollTop)}
+      >
+        <div className="relative" style={{ height: rows.length * ROW_HEIGHT }}>
+          {rows.slice(first, last).map((row, i) => (
+            <TreeRow
+              key={row.path}
+              row={row}
+              top={(first + i) * ROW_HEIGHT}
+              showDevDependencies={showDevDependencies}
+              analysisRunning={analysisRunning}
+            />
+          ))}
         </div>
       </div>
     </div>

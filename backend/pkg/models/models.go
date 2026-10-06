@@ -39,7 +39,6 @@ type AnalyzeRequest struct {
 	PackageJSON            PackageJSON `json:"packageJson"`
 	IncludeDevDependencies bool        `json:"includeDevDependencies"`
 	MaxDepth               int         `json:"maxDepth"`
-	ParallelWorkers        int         `json:"parallelWorkers"`
 }
 
 // AnalyzeResponse represents the response with session info
@@ -55,14 +54,23 @@ const (
 	EventTypeProgress EventType = "progress"
 	EventTypeNode     EventType = "node"
 	EventTypeComplete EventType = "complete"
-	EventTypeError    EventType = "error"
+	// EventTypePackageError reports a single package that failed to
+	// load. It is deliberately not named "error", which EventSource
+	// reserves for connection errors.
+	EventTypePackageError EventType = "package-error"
 )
 
-// Event represents an SSE event
+// SSE wire event names. The stream handler batches node and error
+// events into arrays to keep the number of client updates low.
+const (
+	SSEEventNodes         = "nodes"
+	SSEEventPackageErrors = "package-errors"
+)
+
+// Event represents an analyzer event
 type Event struct {
-	Type  EventType   `json:"-"`
-	Data  interface{} `json:"data"`
-	Level int         `json:"level,omitempty"`
+	Type EventType
+	Data interface{}
 }
 
 // ProgressData represents progress information
