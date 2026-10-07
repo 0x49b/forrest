@@ -9,7 +9,7 @@ COPY index.html vite.config.ts tsconfig*.json postcss.config.js tailwind.config.
 COPY src/ ./src/
 RUN npm run build
 
-FROM golang:1.24-alpine AS backend-builder
+FROM golang:1.27-alpine AS backend-builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
