@@ -1,9 +1,8 @@
-import type { PackageJson, DependencyNode, LoadingProgress } from '../types';
+import type { DependencyNode, PackageJson } from '../types';
 
 export interface AnalyzeConfig {
   includeDevDependencies: boolean;
   maxDepth: number;
-  parallelWorkers: number;
 }
 
 export interface AnalyzeResponse {
@@ -11,50 +10,34 @@ export interface AnalyzeResponse {
   streamUrl: string;
 }
 
-export interface ProgressEvent {
-  current: number;
-  total: number;
-  level: number;
-  currentPackage: string;
-}
-
 export interface CompleteEvent {
   totalProcessed: number;
   duration: string;
 }
 
-export interface ErrorEvent {
+export interface PackageErrorEvent {
   package: string;
   error: string;
 }
 
+async function errorMessage(response: Response): Promise<string> {
+  const body = await response.json().catch(() => null);
+  return body?.error || response.statusText;
+}
+
 export class BackendService {
-  private baseUrl: string;
+  constructor(private baseUrl: string = '/api') {}
 
-  constructor(baseUrl: string = '/api') {
-    this.baseUrl = baseUrl;
-  }
-
-  async startAnalysis(
-    packageJson: PackageJson,
-    config: AnalyzeConfig
-  ): Promise<AnalyzeResponse> {
+  async startAnalysis(packageJson: PackageJson, config: AnalyzeConfig): Promise<AnalyzeResponse> {
     const response = await fetch(`${this.baseUrl}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        packageJson,
-        includeDevDependencies: config.includeDevDependencies,
-        maxDepth: config.maxDepth,
-        parallelWorkers: config.parallelWorkers,
-      }),
+      body: JSON.stringify({ packageJson, ...config }),
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: response.statusText }));
-      throw new Error(`Analysis failed: ${error.error || response.statusText}`);
+      throw new Error(`Analysis failed: ${await errorMessage(response)}`);
     }
-
     return response.json();
   }
 
@@ -62,10 +45,11 @@ export class BackendService {
     return new EventSource(`${this.baseUrl}/events/${sessionId}`);
   }
 
-  async checkHealth(): Promise<{ status: string }> {
-    const response = await fetch(`${this.baseUrl}/health`);
+  async fetchPackage(name: string, version: string): Promise<DependencyNode> {
+    const params = new URLSearchParams({ name, version });
+    const response = await fetch(`${this.baseUrl}/package?${params}`);
     if (!response.ok) {
-      throw new Error('Health check failed');
+      throw new Error(await errorMessage(response));
     }
     return response.json();
   }

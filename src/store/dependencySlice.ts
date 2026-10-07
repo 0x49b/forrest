@@ -1,7 +1,7 @@
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
-import { DependencyNode, PackageJson, LoadingProgress } from '../types';
-import { workerPool } from '../services/workerPool';
-import { backendService } from '../services/backendService';
+import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { DependencyNode, LoadingProgress, PackageJson } from '../types';
+import { backendService, CompleteEvent, PackageErrorEvent } from '../services/backendService';
+import type { AppDispatch, RootState } from './index';
 
 interface DependencyState {
   nodes: Record<string, DependencyNode>;
@@ -9,11 +9,16 @@ interface DependencyState {
   packageData: PackageJson | null;
   loading: boolean;
   error: string | null;
+  failedPackages: number;
   progress: LoadingProgress;
+  maxDepth: number;
   showDevDependencies: boolean;
-  activeWorkers: number;
-  shouldAutoExpand: boolean;
+  // Expanded tree rows keyed by path (see childPath), so expanding a
+  // package in one place does not expand every other occurrence.
+  expanded: Record<string, true>;
 }
+
+const emptyProgress: LoadingProgress = { current: 0, total: 0, level: 0, currentPackage: '' };
 
 const initialState: DependencyState = {
   nodes: {},
@@ -21,696 +26,313 @@ const initialState: DependencyState = {
   packageData: null,
   loading: false,
   error: null,
-  progress: { current: 0, total: 0, level: 0, currentPackage: '' },
+  failedPackages: 0,
+  progress: emptyProgress,
+  maxDepth: 0,
   showDevDependencies: false,
-  activeWorkers: 0,
-  shouldAutoExpand: false,
+  expanded: {},
 };
 
-// Async thunk for loading a single dependency
-export const loadDependency = createAsyncThunk(
+const errorNode = (name: string, version: string, message: string): DependencyNode => ({
+  name,
+  version,
+  description: `Failed to load: ${message}`,
+  dependencies: {},
+  devDependencies: {},
+  loaded: true,
+  loading: false,
+  childrenLoaded: true,
+  hasNoDependencies: true,
+});
+
+/** Child dependencies of a node, honouring the dev dependency toggle. */
+export const childDependencies = (node: DependencyNode, showDev: boolean): Record<string, string> =>
+  showDev ? { ...node.dependencies, ...node.devDependencies } : node.dependencies ?? {};
+
+/** Tree path of a child row. Package names cannot contain ">". */
+export const childPath = (parentPath: string, name: string) => `${parentPath}>${name}`;
+
+// Upper bound for "Expand All" so huge graphs stay responsive.
+const EXPAND_ALL_LIMIT = 5000;
+
+// The open analysis stream. Only one analysis runs at a time; starting a
+// new one or resetting closes the previous stream so stale events
+// cannot leak into the new state.
+let activeStream: EventSource | null = null;
+
+export const closeActiveStream = () => {
+  activeStream?.close();
+  activeStream = null;
+};
+
+// Loads a single package on demand, e.g. below the analyzed depth.
+export const loadDependency = createAsyncThunk<
+  DependencyNode,
+  { packageName: string; version: string },
+  { state: RootState; rejectValue: string }
+>(
   'dependencies/loadDependency',
-  async (
-    { packageName, version, showDevDeps }: { packageName: string; version: string; showDevDeps: boolean },
-    { rejectWithValue }
-  ) => {
+  async ({ packageName, version }, { rejectWithValue }) => {
     try {
-      const result = await workerPool.fetchDependency(packageName, version, showDevDeps);
-      return result;
-    } catch (error) {
-      console.warn(`Failed to load ${packageName}@${version}:`, error instanceof Error ? error.message : 'Unknown error');
-      
-      const errorNode: DependencyNode = {
-        name: packageName,
-        version: version,
-        description: `Failed to load: ${error instanceof Error ? error.message : 'Package not found'}`,
-        dependencies: {},
-        devDependencies: {},
-        loaded: true,
-        loading: false,
-        childrenLoaded: true,
-        hasNoDependencies: true
-      };
-
-      return rejectWithValue({
-        errorNode,
-        packageName,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  }
-);
-
-// Async thunk for loading initial levels
-export const loadInitialLevels = createAsyncThunk(
-  'dependencies/loadInitialLevels',
-  async (
-    { packageData, showDevDeps, maxLevel = 2 }: { packageData: PackageJson; showDevDeps: boolean; maxLevel?: number },
-    { dispatch, getState, rejectWithValue }
-  ) => {
-    try {
-      const state = getState() as { dependencies: DependencyState };
-      
-      // Get all level 1 dependencies
-      const level1Deps = Object.keys({
-        ...(packageData.dependencies || {}),
-        ...(showDevDeps ? (packageData.devDependencies || {}) : {})
-      });
-      
-      if (level1Deps.length === 0) {
-        return { completedLevels: 0, totalProcessed: 0 };
-      }
-      
-      let totalProcessed = 0;
-      const allDepsToLoad = new Set<string>();
-      
-      // Load level 1 dependencies
-      dispatch(setProgress({
-        current: 0,
-        total: level1Deps.length,
-        level: 1,
-        currentPackage: 'Loading level 1 dependencies...'
-      }));
-      
-      const level1Results = await Promise.allSettled(
-        level1Deps.map(async (depName, index) => {
-          const version = (packageData.dependencies?.[depName] || packageData.devDependencies?.[depName]) || 'latest';
-
-          dispatch(setProgress({
-            current: index + 1,
-            total: level1Deps.length,
-            level: 1,
-            currentPackage: depName
-          }));
-
-          try {
-            const result = await workerPool.fetchDependency(depName, version, showDevDeps);
-            totalProcessed++;
-            return { success: true, result, depName };
-          } catch (error) {
-            console.warn(`Failed to load level 1 dependency ${depName}:`, error);
-            return { success: false, error, depName };
-          }
-        })
-      );
-
-      // Batch process level 1 results - collect all nodes first
-      const allLevel1Nodes: Record<string, DependencyNode> = {};
-      level1Results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value.success) {
-          const { result: depResult } = result.value;
-          // Collect all nodes
-          allLevel1Nodes[depResult.mainNode.name] = depResult.mainNode;
-          Object.entries(depResult.childNodes).forEach(([name, node]) => {
-            if (!allLevel1Nodes[name]) {
-              allLevel1Nodes[name] = node;
-            }
-          });
-        }
-      });
-
-      // Single dispatch to add all level 1 nodes at once
-      if (Object.keys(allLevel1Nodes).length > 0) {
-        dispatch(addBatchDependencyNodes(allLevel1Nodes));
-      }
-     
-      // Process level 1 results and collect level 2 dependencies
-      const level2Deps = new Set<string>();
-      
-      level1Results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value.success) {
-          const { result: depResult } = result.value;
-          
-          // Add level 2 dependencies to the set
-          Object.keys(depResult.mainNode.dependencies || {}).forEach(dep => {
-            if (!level1Deps.includes(dep) && dep !== packageData.name) {
-              level2Deps.add(dep);
-            }
-          });
-          
-          if (showDevDeps) {
-            Object.keys(depResult.mainNode.devDependencies || {}).forEach(dep => {
-              if (!level1Deps.includes(dep) && dep !== packageData.name) {
-                level2Deps.add(dep);
-              }
-            });
-          }
-        }
-      });
-      
-      // Load level 2 dependencies if maxLevel >= 2
-      if (maxLevel >= 2 && level2Deps.size > 0) {
-        const level2Array = Array.from(level2Deps);
-        
-        dispatch(setProgress({
-          current: 0,
-          total: level2Array.length,
-          level: 2,
-          currentPackage: 'Loading level 2 dependencies...'
-        }));
-        
-        const level2Results = await Promise.allSettled(
-          level2Array.map(async (depName, index) => {
-            // Find the version from level 1 results
-            let version = 'latest';
-            for (const l1Result of level1Results) {
-              if (l1Result.status === 'fulfilled' && l1Result.value.success) {
-                const deps = l1Result.value.result.mainNode.dependencies || {};
-                const devDeps = l1Result.value.result.mainNode.devDependencies || {};
-                if (deps[depName]) {
-                  version = deps[depName];
-                  break;
-                } else if (devDeps[depName]) {
-                  version = devDeps[depName];
-                  break;
-                }
-              }
-            }
-
-            dispatch(setProgress({
-              current: index + 1,
-              total: level2Array.length,
-              level: 2,
-              currentPackage: depName
-            }));
-
-            try {
-              const result = await workerPool.fetchDependency(depName, version, showDevDeps);
-              totalProcessed++;
-              return { success: true, result, depName };
-            } catch (error) {
-              console.warn(`Failed to load level 2 dependency ${depName}:`, error);
-              return { success: false, error, depName };
-            }
-          })
-        );
-
-        // Batch process level 2 results - collect all nodes first
-        const allLevel2Nodes: Record<string, DependencyNode> = {};
-        level2Results.forEach((result) => {
-          if (result.status === 'fulfilled' && result.value.success) {
-            const { result: depResult } = result.value;
-            // Collect all nodes
-            allLevel2Nodes[depResult.mainNode.name] = depResult.mainNode;
-            Object.entries(depResult.childNodes).forEach(([name, node]) => {
-              if (!allLevel2Nodes[name]) {
-                allLevel2Nodes[name] = node;
-              }
-            });
-          }
-        });
-
-        // Single dispatch to add all level 2 nodes at once
-        if (Object.keys(allLevel2Nodes).length > 0) {
-          dispatch(addBatchDependencyNodes(allLevel2Nodes));
-        }
-
-        // Collect level 3 dependencies if maxLevel >= 3
-        if (maxLevel >= 3) {
-          const level3Deps = new Set<string>();
-
-          level2Results.forEach((result) => {
-            if (result.status === 'fulfilled' && result.value.success) {
-              const { result: depResult } = result.value;
-
-              // Add level 3 dependencies to the set
-              Object.keys(depResult.mainNode.dependencies || {}).forEach(dep => {
-                if (!level1Deps.includes(dep) && !level2Deps.has(dep) && dep !== packageData.name) {
-                  level3Deps.add(dep);
-                }
-              });
-
-              if (showDevDeps) {
-                Object.keys(depResult.mainNode.devDependencies || {}).forEach(dep => {
-                  if (!level1Deps.includes(dep) && !level2Deps.has(dep) && dep !== packageData.name) {
-                    level3Deps.add(dep);
-                  }
-                });
-              }
-            }
-          });
-
-          // Load level 3 dependencies
-          if (level3Deps.size > 0) {
-            const level3Array = Array.from(level3Deps);
-
-            dispatch(setProgress({
-              current: 0,
-              total: level3Array.length,
-              level: 3,
-              currentPackage: 'Loading level 3 dependencies...'
-            }));
-
-            const level3Results = await Promise.allSettled(
-              level3Array.map(async (depName, index) => {
-                // Find the version from level 2 results
-                let version = 'latest';
-                for (const l2Result of level2Results) {
-                  if (l2Result.status === 'fulfilled' && l2Result.value.success) {
-                    const deps = l2Result.value.result.mainNode.dependencies || {};
-                    const devDeps = l2Result.value.result.mainNode.devDependencies || {};
-                    if (deps[depName]) {
-                      version = deps[depName];
-                      break;
-                    } else if (devDeps[depName]) {
-                      version = devDeps[depName];
-                      break;
-                    }
-                  }
-                }
-
-                dispatch(setProgress({
-                  current: index + 1,
-                  total: level3Array.length,
-                  level: 3,
-                  currentPackage: depName
-                }));
-
-                try {
-                  const result = await workerPool.fetchDependency(depName, version, showDevDeps);
-                  totalProcessed++;
-                  return { success: true, result, depName };
-                } catch (error) {
-                  console.warn(`Failed to load level 3 dependency ${depName}:`, error);
-                  return { success: false, error, depName };
-                }
-              })
-            );
-
-            // Batch process level 3 results - collect all nodes first
-            const allLevel3Nodes: Record<string, DependencyNode> = {};
-            level3Results.forEach((result) => {
-              if (result.status === 'fulfilled' && result.value.success) {
-                const { result: depResult } = result.value;
-                // Collect all nodes
-                allLevel3Nodes[depResult.mainNode.name] = depResult.mainNode;
-                Object.entries(depResult.childNodes).forEach(([name, node]) => {
-                  if (!allLevel3Nodes[name]) {
-                    allLevel3Nodes[name] = node;
-                  }
-                });
-              }
-            });
-
-            // Single dispatch to add all level 3 nodes at once
-            if (Object.keys(allLevel3Nodes).length > 0) {
-              dispatch(addBatchDependencyNodes(allLevel3Nodes));
-            }
-          }
-        }
-      }
-
-      return { completedLevels: maxLevel, totalProcessed };
+      return await backendService.fetchPackage(packageName, version);
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Unknown error');
-    } finally {
-      // Clear progress message after a delay
-      setTimeout(() => {
-        dispatch(clearProgressMessage());
-      }, 3000);
     }
+  },
+  {
+    condition: ({ packageName }, { getState }) => {
+      const node = getState().dependencies.nodes[packageName];
+      return !node || (!node.loading && !node.loaded);
+    },
   }
 );
 
-// Async thunk for backend-based analysis with SSE
-export const analyzeWithBackend = createAsyncThunk(
-  'dependencies/analyzeBackend',
-  async (
-    {
-      packageData,
-      showDevDeps,
-      maxDepth = 2,
-    }: { packageData: PackageJson; showDevDeps: boolean; maxDepth?: number },
-    { dispatch }
-  ) => {
-    try {
-      // Start analysis on backend
-      const { sessionId } = await backendService.startAnalysis(packageData, {
-        includeDevDependencies: showDevDeps,
-        maxDepth,
-        parallelWorkers: 100,
-      });
+// Loads every child of a node that is not in the store yet.
+export const loadMissingChildren =
+  (packageName: string) => (dispatch: AppDispatch, getState: () => RootState) => {
+    const { nodes, showDevDependencies } = getState().dependencies;
+    const node = nodes[packageName];
+    if (!node) return;
 
-      // Create SSE connection
-      const eventSource = backendService.createEventSource(sessionId);
-
-      // Handle SSE events
-      eventSource.addEventListener('progress', (e: MessageEvent) => {
-        const progress = JSON.parse(e.data);
-        dispatch(setProgress(progress));
-      });
-
-      eventSource.addEventListener('node', (e: MessageEvent) => {
-        const node: DependencyNode = JSON.parse(e.data);
-        dispatch(addBatchDependencyNodes({ [node.name]: node }));
-      });
-
-      eventSource.addEventListener('complete', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        console.log('Analysis complete:', data);
-        eventSource.close();
-        dispatch(setLoading(false));
-        dispatch(setShouldAutoExpand(true));
-        dispatch(setProgress({
-          current: data.totalProcessed,
-          total: data.totalProcessed,
-          level: maxDepth,
-          currentPackage: `Completed: ${data.totalProcessed} packages in ${data.duration}`
-        }));
-
-        // Clear progress after showing completion
-        setTimeout(() => {
-          dispatch(clearProgressMessage());
-        }, 3000);
-      });
-
-      eventSource.addEventListener('error', (e: MessageEvent) => {
-        try {
-          const errorData = JSON.parse(e.data);
-          console.error('Package error:', errorData);
-          dispatch(setError(`Failed to load ${errorData.package}: ${errorData.error}`));
-        } catch (parseError) {
-          console.error('Failed to parse error event:', parseError);
-        }
-      });
-
-      eventSource.onerror = (error) => {
-        console.error('SSE connection error:', error);
-        eventSource.close();
-        dispatch(setLoading(false));
-        dispatch(setError('Connection to server lost'));
-      };
-
-      return sessionId;
-    } catch (error) {
-      dispatch(setLoading(false));
-      dispatch(
-        setError(
-          error instanceof Error ? error.message : 'Unknown error occurred'
-        )
-      );
-      throw error;
+    for (const [name, version] of Object.entries(childDependencies(node, showDevDependencies))) {
+      if (!nodes[name]) {
+        dispatch(loadDependency({ packageName: name, version }));
+      }
     }
-  }
-);
+  };
+
+// Starts a backend analysis and streams its results into the store.
+export const analyzeWithBackend = createAsyncThunk<
+  string,
+  { packageData: PackageJson; showDevDeps: boolean; maxDepth: number },
+  { dispatch: AppDispatch }
+>('dependencies/analyzeBackend', async ({ packageData, showDevDeps, maxDepth }, { dispatch }) => {
+  closeActiveStream();
+
+  const { sessionId } = await backendService.startAnalysis(packageData, {
+    includeDevDependencies: showDevDeps,
+    maxDepth,
+  });
+
+  const eventSource = backendService.createEventSource(sessionId);
+  activeStream = eventSource;
+  const isActive = () => activeStream === eventSource;
+
+  // The backend batches nodes and errors, so each event is one store update.
+  eventSource.addEventListener('nodes', (e: MessageEvent) => {
+    if (isActive()) dispatch(nodesReceived(JSON.parse(e.data)));
+  });
+
+  eventSource.addEventListener('package-errors', (e: MessageEvent) => {
+    if (isActive()) dispatch(packagesFailed(JSON.parse(e.data)));
+  });
+
+  eventSource.addEventListener('progress', (e: MessageEvent) => {
+    if (isActive()) dispatch(setProgress(JSON.parse(e.data)));
+  });
+
+  eventSource.addEventListener('complete', (e: MessageEvent) => {
+    if (!isActive()) return;
+    closeActiveStream();
+    dispatch(analysisCompleted(JSON.parse(e.data)));
+  });
+
+  eventSource.onerror = () => {
+    if (!isActive()) return;
+    closeActiveStream();
+    dispatch(analysisFailed('Connection to server lost'));
+  };
+
+  return sessionId;
+});
 
 const dependencySlice = createSlice({
   name: 'dependencies',
   initialState,
   reducers: {
     setPackageData: (state, action: PayloadAction<PackageJson>) => {
-      state.packageData = action.payload;
-      state.rootPackage = action.payload.name;
-      
-      // Add root package as a loaded node
-      const rootNode: DependencyNode = {
-        name: action.payload.name,
-        version: action.payload.version,
-        description: action.payload.description,
-        dependencies: action.payload.dependencies || {},
-        devDependencies: action.payload.devDependencies || {},
-        loaded: true,
-        loading: false,
-        childrenLoaded: true,
-        homepage: action.payload.homepage,
-        repository: action.payload.repository,
-        license: action.payload.license,
-        hasNoDependencies: (!action.payload.dependencies || Object.keys(action.payload.dependencies).length === 0) &&
-          (!state.showDevDependencies || !action.payload.devDependencies || Object.keys(action.payload.devDependencies).length === 0)
+      const pkg = action.payload;
+      state.packageData = pkg;
+      state.rootPackage = pkg.name;
+      state.error = null;
+      state.failedPackages = 0;
+      state.nodes = {
+        [pkg.name]: {
+          name: pkg.name,
+          version: pkg.version,
+          description: pkg.description,
+          dependencies: pkg.dependencies || {},
+          devDependencies: pkg.devDependencies || {},
+          homepage: pkg.homepage,
+          repository: pkg.repository,
+          license: pkg.license,
+          loaded: true,
+          loading: false,
+          childrenLoaded: true,
+        },
       };
-      
-      state.nodes = { [action.payload.name]: rootNode };
-      
-      // Add initial child dependencies as unloaded nodes
-      const deps = action.payload.dependencies || {};
-      const devDeps = state.showDevDependencies ? (action.payload.devDependencies || {}) : {};
-      const allDeps = { ...deps, ...devDeps };
-      
-      Object.entries(allDeps).forEach(([name, version]) => {
-        if (!state.nodes[name]) {
-          state.nodes[name] = {
-            name,
-            version,
-            description: undefined,
-            dependencies: {},
-            devDependencies: {},
-            loaded: false,
-            loading: false,
-            childrenLoaded: false,
-            hasNoDependencies: false
-          };
-        }
-      });
-      
-      // Update root node's hasNoDependencies flag
-      state.nodes[action.payload.name].hasNoDependencies = Object.keys(allDeps).length === 0;
+      state.expanded = { [pkg.name]: true };
     },
-    
-    setNodeLoading: (state, action: PayloadAction<{ packageName: string; loading: boolean }>) => {
-      const { packageName, loading } = action.payload;
-      if (state.nodes[packageName]) {
-        state.nodes[packageName].loading = loading;
-      }
-    },
-    
-    setLoading: (state, action: PayloadAction<boolean>) => {
-      state.loading = action.payload;
-    },
-    
-    setProgress: (state, action: PayloadAction<LoadingProgress>) => {
-      state.progress = action.payload;
-    },
-    
-    setActiveWorkers: (state, action: PayloadAction<number>) => {
-      state.activeWorkers = action.payload;
-    },
-    
-    setShouldAutoExpand: (state, action: PayloadAction<boolean>) => {
-      state.shouldAutoExpand = action.payload;
-    },
-    
-    incrementActiveWorkers: (state) => {
-      state.activeWorkers += 1;
-    },
-    
-    decrementActiveWorkers: (state) => {
-      state.activeWorkers = Math.max(0, state.activeWorkers - 1);
-    },
-    
-    setError: (state, action: PayloadAction<string | null>) => {
-      state.error = action.payload;
-    },
-    
-    toggleDevDependencies: (state) => {
-      state.showDevDependencies = !state.showDevDependencies;
-      
-      // Reset childrenLoaded for all nodes so they can be reloaded with new dev dependency setting
-      Object.values(state.nodes).forEach(node => {
-        if (node.loaded) {
-          node.childrenLoaded = false;
-          
-          // Recalculate hasNoDependencies based on new showDevDependencies setting
-          const regularDeps = Object.keys(node.dependencies || {}).length;
-          const devDeps = state.showDevDependencies ? Object.keys(node.devDependencies || {}).length : 0;
-          node.hasNoDependencies = (regularDeps + devDeps) === 0;
-        }
-      });
-      
-      // Remove nodes that are no longer relevant
-      if (!state.showDevDependencies) {
-        const nodesToKeep: Record<string, DependencyNode> = {};
-        const rootNode = state.packageData?.name;
-        
-        // Keep root node
-        if (rootNode && state.nodes[rootNode]) {
-          nodesToKeep[rootNode] = state.nodes[rootNode];
-        }
-        
-        // Keep nodes that are regular dependencies
-        Object.values(state.nodes).forEach(node => {
-          if (node.loaded && node.dependencies) {
-            Object.keys(node.dependencies).forEach(depName => {
-              if (state.nodes[depName]) {
-                nodesToKeep[depName] = state.nodes[depName];
-              }
-            });
-          }
-        });
-        
-        state.nodes = nodesToKeep;
-      }
-    },
-    
+
     setShowDevDependencies: (state, action: PayloadAction<boolean>) => {
       state.showDevDependencies = action.payload;
     },
-    
-    reset: () => initialState,
-    
-    clearProgressMessage: (state) => {
-      if (state.activeWorkers === 0) {
-        state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+
+    toggleDevDependencies: (state) => {
+      state.showDevDependencies = !state.showDevDependencies;
+    },
+
+    setProgress: (state, action: PayloadAction<LoadingProgress>) => {
+      state.progress = action.payload;
+    },
+
+    nodesReceived: (state, action: PayloadAction<DependencyNode[]>) => {
+      for (const node of action.payload) {
+        state.nodes[node.name] = node;
       }
     },
 
-    addDependencyNodes: (state, action: PayloadAction<{ mainNode: DependencyNode; childNodes: Record<string, DependencyNode> }>) => {
-      const { mainNode, childNodes } = action.payload;
+    packagesFailed: (state, action: PayloadAction<PackageErrorEvent[]>) => {
+      for (const { package: name, error } of action.payload) {
+        const existing = state.nodes[name];
+        state.nodes[name] = errorNode(name, existing?.version ?? '', error);
+      }
+      state.failedPackages += action.payload.length;
+      const last = action.payload[action.payload.length - 1];
+      state.error =
+        state.failedPackages === 1
+          ? `Failed to load ${last.package}: ${last.error}`
+          : `${state.failedPackages} packages failed to load (last: ${last.package}: ${last.error})`;
+    },
 
-      // Update the main node
-      state.nodes[mainNode.name] = mainNode;
+    analysisCompleted: (state, action: PayloadAction<CompleteEvent>) => {
+      const { totalProcessed, duration } = action.payload;
+      state.loading = false;
+      state.progress = {
+        current: totalProcessed,
+        total: totalProcessed,
+        level: state.maxDepth,
+        currentPackage: `Completed: ${totalProcessed} packages in ${duration}`,
+      };
 
-      // Add child nodes
-      Object.entries(childNodes).forEach(([name, node]) => {
-        if (!state.nodes[name]) {
-          state.nodes[name] = node;
+      // Expand the first level only, deeper levels on demand.
+      const rootName = state.rootPackage;
+      const root = rootName ? state.nodes[rootName] : undefined;
+      if (rootName && root) {
+        for (const name of Object.keys(childDependencies(root, state.showDevDependencies))) {
+          if (state.nodes[name]?.loaded) state.expanded[childPath(rootName, name)] = true;
         }
-      });
+      }
     },
 
-    addBatchDependencyNodes: (state, action: PayloadAction<Record<string, DependencyNode>>) => {
-      const nodes = action.payload;
-
-      // Batch update all nodes at once
-      Object.entries(nodes).forEach(([name, node]) => {
-        state.nodes[name] = node;
-      });
+    analysisFailed: (state, action: PayloadAction<string>) => {
+      state.loading = false;
+      state.error = action.payload;
     },
+
+    toggleExpanded: (state, action: PayloadAction<string>) => {
+      if (state.expanded[action.payload]) {
+        delete state.expanded[action.payload];
+      } else {
+        state.expanded[action.payload] = true;
+      }
+    },
+
+    // Expands every loaded package at its shallowest occurrence. Other
+    // occurrences stay collapsed, otherwise every shared subtree would be
+    // rendered once per parent.
+    expandAll: (state) => {
+      const rootName = state.rootPackage;
+      if (!rootName) return;
+
+      const expanded: Record<string, true> = {};
+      const done = new Set<string>([rootName]);
+      let rows = 0;
+      // Breadth first, so the occurrence closest to the root wins.
+      let queue: Array<[string, string]> = [[rootName, rootName]];
+      while (queue.length > 0 && rows < EXPAND_ALL_LIMIT) {
+        const next: Array<[string, string]> = [];
+        for (const [name, path] of queue) {
+          const node = state.nodes[name];
+          if (!node?.loaded) continue;
+          const children = Object.keys(childDependencies(node, state.showDevDependencies));
+          if (children.length === 0) continue;
+          expanded[path] = true;
+          rows += children.length;
+          for (const child of children) {
+            if (!done.has(child)) {
+              done.add(child);
+              next.push([child, childPath(path, child)]);
+            }
+          }
+        }
+        queue = next;
+      }
+      state.expanded = expanded;
+    },
+
+    collapseAll: (state) => {
+      state.expanded = state.rootPackage ? { [state.rootPackage]: true } : {};
+    },
+
+    reset: () => initialState,
   },
-  
+
   extraReducers: (builder) => {
     builder
       .addCase(loadDependency.pending, (state, action) => {
-        const { packageName } = action.meta.arg;
-        state.loading = true;
-        state.error = null;
-        state.activeWorkers += 1;
-        state.progress = {
-          current: 0,
-          total: 1,
-          level: 1,
-          currentPackage: packageName
-        };
-        
-        if (state.nodes[packageName]) {
-          state.nodes[packageName].loading = true;
+        const { packageName, version } = action.meta.arg;
+        const existing = state.nodes[packageName];
+        if (existing) {
+          existing.loading = true;
+        } else {
+          state.nodes[packageName] = {
+            name: packageName,
+            version,
+            dependencies: {},
+            devDependencies: {},
+            loaded: false,
+            loading: true,
+            childrenLoaded: false,
+          };
         }
       })
       .addCase(loadDependency.fulfilled, (state, action) => {
-        const { mainNode, childNodes } = action.payload;
-        
-        state.activeWorkers = Math.max(0, state.activeWorkers - 1);
-        
-        // Update the main node
-        state.nodes[mainNode.name] = mainNode;
-        
-        // Add child nodes
-        Object.entries(childNodes).forEach(([name, node]) => {
-          if (!state.nodes[name]) {
-            state.nodes[name] = node;
-          }
-        });
-        
-        // Only stop loading when no active workers remain
-        if (state.activeWorkers === 0) {
-          state.loading = false;
-          state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
-        }
-      })
-      .addCase(loadInitialLevels.pending, (state) => {
-        state.loading = true;
-        state.error = null;
-      })
-      .addCase(loadInitialLevels.fulfilled, (state, action) => {
-        const { completedLevels, totalProcessed } = action.payload;
-        state.loading = false;
-        state.shouldAutoExpand = true;
-        state.progress = { 
-          current: totalProcessed, 
-          total: totalProcessed, 
-          level: completedLevels, 
-          currentPackage: `Completed loading ${completedLevels} levels (${totalProcessed} packages)` 
-        };
-        
-       // Clear progress after showing completion
-       setTimeout(() => {
-         if (state.progress.currentPackage?.includes('Completed loading')) {
-           state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
-         }
-       }, 3000);
-      })
-      .addCase(loadInitialLevels.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload as string || 'Failed to load initial levels';
-        state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
+        state.nodes[action.meta.arg.packageName] = action.payload;
       })
       .addCase(loadDependency.rejected, (state, action) => {
-        const payload = action.payload as any;
-        
-        if (payload?.errorNode && payload?.packageName) {
-          state.nodes[payload.packageName] = payload.errorNode;
-          state.error = payload.error;
-        }
-        
-        // Only stop loading when no active workers remain
-        if (state.activeWorkers === 0) {
-          state.loading = false;
-          state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
-        }
-     })
-     // Backend analysis thunk handlers (must be before addMatcher)
-     .addCase(analyzeWithBackend.pending, (state) => {
-       state.loading = true;
-       state.error = null;
-       state.progress = { current: 0, total: 0, level: 0, currentPackage: 'Starting analysis...' };
-     })
-     .addCase(analyzeWithBackend.fulfilled, (state, action) => {
-       // SSE will handle the loading state via events
-       // This just stores the session ID if needed
-       console.log('Backend analysis started with session:', action.payload);
-     })
-     .addCase(analyzeWithBackend.rejected, (state, action) => {
-       state.loading = false;
-       state.error = action.error.message || 'Failed to start backend analysis';
-       state.progress = { current: 0, total: 0, level: 0, currentPackage: '' };
-     })
-     // Handle individual dependency loads from loadInitialLevels
-     .addMatcher(
-       (action) => action.type === 'dependencies/loadDependency/fulfilled' && action.meta?.arg?.fromInitialLoad,
-       (state, action) => {
-         // This will be handled by the existing loadDependency.fulfilled case
-       }
-     );
-
-     // Add a custom matcher to handle batch updates from loadInitialLevels
-     builder.addMatcher(
-       (action) => action.type.startsWith('dependencies/loadInitialLevels'),
-       (state, action) => {
-         // Handle batch dependency loading results
-         if (action.type === 'dependencies/loadInitialLevels/pending') {
-           // Already handled above
-         } else if (action.type === 'dependencies/loadInitialLevels/fulfilled') {
-           // Process any batch results here if needed
-         }
+        const { packageName, version } = action.meta.arg;
+        const message = action.payload ?? action.error.message ?? 'Unknown error';
+        state.nodes[packageName] = errorNode(packageName, version, message);
+        state.error = `Failed to load ${packageName}: ${message}`;
+      })
+      .addCase(analyzeWithBackend.pending, (state, action) => {
+        state.loading = true;
+        state.error = null;
+        state.maxDepth = action.meta.arg.maxDepth;
+        state.progress = { ...emptyProgress, currentPackage: 'Starting analysis...' };
+      })
+      .addCase(analyzeWithBackend.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.error.message || 'Failed to start backend analysis';
+        state.progress = emptyProgress;
       });
   },
 });
 
 export const {
   setPackageData,
-  setNodeLoading,
-  setLoading,
-  setProgress,
-  setActiveWorkers,
-  setShouldAutoExpand,
-  incrementActiveWorkers,
-  decrementActiveWorkers,
-  setError,
-  toggleDevDependencies,
   setShowDevDependencies,
+  toggleDevDependencies,
+  setProgress,
+  nodesReceived,
+  packagesFailed,
+  analysisCompleted,
+  analysisFailed,
+  toggleExpanded,
+  expandAll,
+  collapseAll,
   reset,
-  clearProgressMessage,
-  addDependencyNodes,
-  addBatchDependencyNodes,
 } = dependencySlice.actions;
 
 export default dependencySlice.reducer;

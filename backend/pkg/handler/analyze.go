@@ -9,6 +9,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// maxDepthLimit caps the requested depth; every extra level multiplies
+// the number of registry requests.
+const maxDepthLimit = 5
+
 // AnalyzeHandler accepts analyze requests and stores them in a session
 // to be consumed by the SSE handler when the client connects.
 type AnalyzeHandler struct {
@@ -39,11 +43,11 @@ func (h *AnalyzeHandler) Analyze(c *fiber.Ctx) error {
 		})
 	}
 
-	if req.MaxDepth == 0 {
+	switch {
+	case req.MaxDepth <= 0:
 		req.MaxDepth = 2
-	}
-	if req.ParallelWorkers == 0 {
-		req.ParallelWorkers = 100
+	case req.MaxDepth > maxDepthLimit:
+		req.MaxDepth = maxDepthLimit
 	}
 
 	sessionID := h.sseManager.CreateSession(req)

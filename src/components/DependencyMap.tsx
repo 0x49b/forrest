@@ -1,10 +1,8 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {DependencyNode} from '../types';
+import {useAppSelector} from '../store/hooks';
 
 interface DependencyMapProps {
-    dependencies: Map<string, DependencyNode>;
     rootPackage: string;
-    showDevDependencies: boolean;
 }
 
 interface GraphNode {
@@ -24,11 +22,19 @@ interface GraphEdge {
     isDevDependency: boolean;
 }
 
-export const DependencyMap: React.FC<DependencyMapProps> = ({
-                                                                dependencies,
-                                                                rootPackage,
-                                                                showDevDependencies
-                                                            }) => {
+// Deterministic pseudo random offset in [-0.5, 0.5) so the layout stays
+// stable while nodes stream in.
+const jitter = (name: string, salt: number) => {
+    let hash = 2166136261 ^ salt;
+    for (let i = 0; i < name.length; i++) {
+        hash = Math.imul(hash ^ name.charCodeAt(i), 16777619);
+    }
+    return ((hash >>> 0) % 1000) / 1000 - 0.5;
+};
+
+export const DependencyMap: React.FC<DependencyMapProps> = ({rootPackage}) => {
+    const dependencies = useAppSelector(state => state.dependencies.nodes);
+    const showDevDependencies = useAppSelector(state => state.dependencies.showDevDependencies);
     const svgRef = useRef<SVGSVGElement>(null);
     const [transform, setTransform] = useState({x: 0, y: 0, scale: 1});
     const [isDragging, setIsDragging] = useState(false);
@@ -42,8 +48,8 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
         const processNode = (name: string, level: number, parentX = 0, parentY = 0, angle = 0, isDevDep = false, siblingIndex = 0) => {
             if (processedNodes.has(name) || level > 3) return; // Limit depth to prevent infinite recursion
 
-            const node = dependencies.get(name);
-            if (!node) return;
+            const node = dependencies[name];
+            if (!node || !node.loaded) return;
 
             processedNodes.add(name);
 
@@ -66,9 +72,9 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
                 y = parentY + Math.sin(adjustedAngle) * radius;
 
                 // Add some randomization to prevent perfect alignment
-                const jitter = 30;
-                x += (Math.random() - 0.5) * jitter;
-                y += (Math.random() - 0.5) * jitter;
+                const jitterSize = 30;
+                x += jitter(name, 1) * jitterSize;
+                y += jitter(name, 2) * jitterSize;
             }
 
             nodeMap.set(name, {
@@ -115,7 +121,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
 
         processNode(rootPackage, 0, 0, 0, 0, false, 0);
 
-        return {nodes: Array.from(nodeMap.values()), edges: edgeList};
+        return {nodes: nodeMap, edges: edgeList};
     }, [dependencies, rootPackage, showDevDependencies]);
 
     // Add wheel event listener with passive: false to allow preventDefault
@@ -159,10 +165,6 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
         setIsDragging(false);
     };
 
-    const handleNodeClick = (nodeId: string) => {
-        setSelectedNode(nodeId === selectedNode ? null : nodeId);
-    };
-
     const resetView = () => {
         setTransform({x: 0, y: 0, scale: 1});
     };
@@ -173,7 +175,95 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
         return () => document.removeEventListener('mouseup', handleGlobalMouseUp);
     }, []);
 
-    const selectedNodeData = selectedNode ? dependencies.get(selectedNode) : null;
+    const selectedNodeData = selectedNode ? dependencies[selectedNode] : null;
+
+    // The graph only changes with the data or the selection, not while
+    // panning or zooming, so its elements are built once per change.
+    const graph = useMemo(() => {
+        const nodeList = Array.from(nodes.values());
+        return (
+            <>
+                {/* Edges */}
+                {edges.map((edge, index) => {
+                    const fromNode = nodes.get(edge.from);
+                    const toNode = nodes.get(edge.to);
+
+                    if (!fromNode || !toNode) return null;
+
+                    return (
+                        <line
+                            key={`${edge.from}-${edge.to}-${index}`}
+                            x1={fromNode.x}
+                            y1={fromNode.y}
+                            x2={toNode.x}
+                            y2={toNode.y}
+                            stroke="#64748b"
+                            strokeWidth="1"
+                            opacity="0.6"
+                            markerEnd="url(#arrowhead)"
+                        />
+                    );
+                })}
+
+                {/* Nodes */}
+                {nodeList.map(node => (
+                    <g key={node.id}>
+                        <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={node.isRoot ? 20 : 12}
+                            fill={
+                                node.isRoot
+                                    ? '#3b82f6'
+                                    : selectedNode === node.id
+                                        ? '#10b981'
+                                        : node.isDevDependency
+                                            ? '#f97316'
+                                            : '#6366f1'
+                            }
+                            stroke="#fff"
+                            strokeWidth="2"
+                            className="cursor-pointer hover:opacity-80 transition-opacity"
+                            onClick={() => setSelectedNode(prev => (prev === node.id ? null : node.id))}
+                        />
+                        {node.isDevDependency && (
+                            <circle
+                                cx={node.x + 8}
+                                cy={node.y - 8}
+                                r="4"
+                                fill="#ea580c"
+                                stroke="#fff"
+                                strokeWidth="1"
+                                className="pointer-events-none"
+                            />
+                        )}
+                        <text
+                            x={node.x}
+                            y={node.y + (node.isRoot ? 35 : 25)}
+                            textAnchor="middle"
+                            fontSize={node.isRoot ? "14" : "12"}
+                            fill={node.isDevDependency ? "#ea580c" : "#1e293b"}
+                            className="pointer-events-none font-medium"
+                        >
+                            {node.name}
+                        </text>
+                        {node.version && (
+                            <text
+                                x={node.x}
+                                y={node.y + (node.isRoot ? 50 : 38)}
+                                textAnchor="middle"
+                                fontSize="10"
+                                fill={node.isDevDependency ? "#c2410c" : "#64748b"}
+                                className="pointer-events-none"
+                            >
+                                v{node.version}
+                            </text>
+                        )}
+                    </g>
+                ))}
+            </>
+        );
+    }, [nodes, edges, selectedNode]);
 
     return (
         <div className="h-[600px] relative bg-slate-50">
@@ -189,7 +279,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
                     </button>
                     <div className="text-xs text-slate-600">
                         <div>Zoom: {Math.round(transform.scale * 100)}%</div>
-                        <div>Nodes: {nodes.length}</div>
+                        <div>Nodes: {nodes.size}</div>
                         {showDevDependencies && (
                             <div className="mt-2 pt-2 border-t border-slate-200">
                                 <div className="flex items-center gap-1 mb-1">
@@ -272,84 +362,7 @@ export const DependencyMap: React.FC<DependencyMapProps> = ({
                 <g
                     transform={`translate(${400 + transform.x}, ${300 + transform.y}) scale(${transform.scale})`}
                 >
-                    {/* Edges */}
-                    {edges.map((edge, index) => {
-                        const fromNode = nodes.find(n => n.id === edge.from);
-                        const toNode = nodes.find(n => n.id === edge.to);
-
-                        if (!fromNode || !toNode) return null;
-
-                        return (
-                            <line
-                                key={`${edge.from}-${edge.to}-${index}`}
-                                x1={fromNode.x}
-                                y1={fromNode.y}
-                                x2={toNode.x}
-                                y2={toNode.y}
-                                stroke="#64748b"
-                                strokeWidth="1"
-                                opacity="0.6"
-                                markerEnd="url(#arrowhead)"
-                            />
-                        );
-                    })}
-
-                    {/* Nodes */}
-                    {nodes.map(node => (
-                        <g key={node.id}>
-                            <circle
-                                cx={node.x}
-                                cy={node.y}
-                                r={node.isRoot ? 20 : 12}
-                                fill={
-                                    node.isRoot
-                                        ? '#3b82f6'
-                                        : selectedNode === node.id
-                                            ? '#10b981'
-                                            : node.isDevDependency
-                                                ? '#f97316'
-                                                : '#6366f1'
-                                }
-                                stroke="#fff"
-                                strokeWidth="2"
-                                className="cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => handleNodeClick(node.id)}
-                            />
-                            {node.isDevDependency && (
-                                <circle
-                                    cx={node.x + 8}
-                                    cy={node.y - 8}
-                                    r="4"
-                                    fill="#ea580c"
-                                    stroke="#fff"
-                                    strokeWidth="1"
-                                    className="pointer-events-none"
-                                />
-                            )}
-                            <text
-                                x={node.x}
-                                y={node.y + (node.isRoot ? 35 : 25)}
-                                textAnchor="middle"
-                                fontSize={node.isRoot ? "14" : "12"}
-                                fill={node.isDevDependency ? "#ea580c" : "#1e293b"}
-                                className="pointer-events-none font-medium"
-                            >
-                                {node.name}
-                            </text>
-                            {node.version && (
-                                <text
-                                    x={node.x}
-                                    y={node.y + (node.isRoot ? 50 : 38)}
-                                    textAnchor="middle"
-                                    fontSize="10"
-                                    fill={node.isDevDependency ? "#c2410c" : "#64748b"}
-                                    className="pointer-events-none"
-                                >
-                                    v{node.version}
-                                </text>
-                            )}
-                        </g>
-                    ))}
+                    {graph}
                 </g>
             </svg>
         </div>

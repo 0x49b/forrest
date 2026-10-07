@@ -23,7 +23,7 @@ make build              # Builds everything
 ```
 
 ```shell
-./bin/forrest-server    # Run on port 8080 (or PORT=3000 ./bin/forrest-server)
+./bin/forrest-server    # Run on port 8081 (or PORT=3000 ./bin/forrest-server)
 ```
 
 ### Docker:
@@ -37,8 +37,9 @@ docker-compose up    # Builds and runs everything
 ### Backend:
 
 - 🚀 Fast - Goroutines handle 100+ concurrent NPM fetches
-- 💾 Efficient Caching - 10,000-entry LRU cache with automatic cleanup
-- 📡 Real-time Updates - SSE streams progress and results as they arrive
+- 💾 Efficient Caching - 10,000-entry LRU cache, concurrent requests for the same package are deduplicated
+- 📉 Small Payloads - Versions are resolved from abbreviated npm metadata, only the matching version manifest is downloaded
+- 📡 Real-time Updates - SSE streams progress and results, batched every 100ms
 - 📦 Single Binary - Frontend embedded with embed.FS
 - 🔒 Type-Safe - Go structs match frontend TypeScript interfaces
 

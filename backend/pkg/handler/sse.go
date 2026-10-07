@@ -3,12 +3,23 @@ package handler
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"forrest/backend/pkg/analyzer"
 	"forrest/backend/pkg/models"
 	"forrest/backend/pkg/sse"
 	"log"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+)
+
+const (
+	// flushInterval batches events so the client updates its state a
+	// few times per second instead of once per package.
+	flushInterval = 100 * time.Millisecond
+	// heartbeatInterval keeps idle connections alive and detects
+	// disconnected clients.
+	heartbeatInterval = 15 * time.Second
 )
 
 // SSEHandler streams analysis events to the client. The analyzer is
@@ -30,7 +41,6 @@ func NewSSEHandler(sseManager *sse.Manager, a *analyzer.Analyzer) *SSEHandler {
 // Stream handles GET /api/events/:sessionId.
 func (h *SSEHandler) Stream(c *fiber.Ctx) error {
 	sessionID := c.Params("sessionId")
-	log.Printf("[SSE] Client connecting to session: %s", sessionID)
 
 	req, ok := h.sseManager.ConsumeSession(sessionID)
 	if !ok {
@@ -51,38 +61,125 @@ func (h *SSEHandler) Stream(c *fiber.Ctx) error {
 		defer cancel()
 
 		events := h.analyzer.Analyze(ctx, req)
+		s := &stream{w: w}
 
-		if _, err := w.WriteString("event: connected\ndata: {\"status\":\"connected\"}\n\n"); err != nil {
-			log.Printf("[SSE:%s] Write error on connect event: %v", sessionID, err)
+		s.write("connected", fiber.Map{"status": "connected"})
+		if err := s.flush(); err != nil {
+			log.Printf("[SSE:%s] Client disconnected before first event: %v", sessionID, err)
 			return
 		}
-		if err := w.Flush(); err != nil {
-			log.Printf("[SSE:%s] Flush error on connect event (client likely disconnected): %v", sessionID, err)
-			return
+
+		ticker := time.NewTicker(flushInterval)
+		defer ticker.Stop()
+		lastWrite := time.Now()
+
+		for {
+			select {
+			case event, open := <-events:
+				if !open {
+					log.Printf("[SSE:%s] Events channel closed without complete event", sessionID)
+					s.flush()
+					return
+				}
+				s.add(event)
+				if event.Type == models.EventTypeComplete {
+					if err := s.flush(); err != nil {
+						log.Printf("[SSE:%s] Flush error on complete: %v", sessionID, err)
+					}
+					return
+				}
+
+			case <-ticker.C:
+				if !s.pending() {
+					if time.Since(lastWrite) < heartbeatInterval {
+						continue
+					}
+					s.comment("ping")
+				}
+				if err := s.flush(); err != nil {
+					log.Printf("[SSE:%s] Client disconnected: %v", sessionID, err)
+					return
+				}
+				lastWrite = time.Now()
+			}
 		}
-
-		eventsSent := 0
-		for event := range events {
-			eventsSent++
-			formatted := sse.FormatSSE(event)
-
-			if _, err := w.WriteString(formatted); err != nil {
-				log.Printf("[SSE:%s] Write error after %d events: %v", sessionID, eventsSent, err)
-				return
-			}
-			if err := w.Flush(); err != nil {
-				log.Printf("[SSE:%s] Flush error after %d events (client disconnected): %v", sessionID, eventsSent, err)
-				return
-			}
-
-			if event.Type == models.EventTypeComplete {
-				log.Printf("[SSE:%s] Complete event sent, total events: %d", sessionID, eventsSent)
-				return
-			}
-		}
-
-		log.Printf("[SSE:%s] Events channel closed without complete event, total events: %d", sessionID, eventsSent)
 	})
 
 	return nil
+}
+
+// stream buffers analyzer events and writes them as SSE frames. Node
+// and error events are coalesced into arrays, progress events collapse
+// to the most recent one.
+type stream struct {
+	w        *bufio.Writer
+	nodes    []interface{}
+	errors   []interface{}
+	progress interface{}
+	err      error
+}
+
+func (s *stream) add(event models.Event) {
+	switch event.Type {
+	case models.EventTypeNode:
+		s.nodes = append(s.nodes, event.Data)
+	case models.EventTypePackageError:
+		s.errors = append(s.errors, event.Data)
+	case models.EventTypeProgress:
+		s.progress = event.Data
+	case models.EventTypeComplete:
+		s.writePending()
+		s.write(string(models.EventTypeComplete), event.Data)
+	}
+}
+
+func (s *stream) pending() bool {
+	return len(s.nodes) > 0 || len(s.errors) > 0 || s.progress != nil
+}
+
+func (s *stream) writePending() {
+	if len(s.nodes) > 0 {
+		s.write(models.SSEEventNodes, s.nodes)
+		s.nodes = s.nodes[:0]
+	}
+	if len(s.errors) > 0 {
+		s.write(models.SSEEventPackageErrors, s.errors)
+		s.errors = s.errors[:0]
+	}
+	if s.progress != nil {
+		s.write(string(models.EventTypeProgress), s.progress)
+		s.progress = nil
+	}
+}
+
+func (s *stream) write(event string, data interface{}) {
+	if s.err != nil {
+		return
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[SSE] Failed to encode %s event: %v", event, err)
+		return
+	}
+	s.w.WriteString("event: ")
+	s.w.WriteString(event)
+	s.w.WriteString("\ndata: ")
+	s.w.Write(payload)
+	_, s.err = s.w.WriteString("\n\n")
+}
+
+func (s *stream) comment(text string) {
+	if s.err == nil {
+		_, s.err = s.w.WriteString(": " + text + "\n\n")
+	}
+}
+
+// flush writes all pending events and flushes them to the client.
+func (s *stream) flush() error {
+	s.writePending()
+	if s.err != nil {
+		return s.err
+	}
+	s.err = s.w.Flush()
+	return s.err
 }

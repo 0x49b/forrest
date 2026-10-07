@@ -2,12 +2,12 @@
 
 # Build frontend
 build-frontend:
-	npm install
+	npm ci
 	npm run build
 
 # Build backend (with embedded frontend)
 build-backend: build-frontend
-	go build -o bin/forrest-server .
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/forrest-server .
 
 # Build both
 build: build-backend
@@ -19,7 +19,7 @@ run: build
 # Development mode (separate processes)
 dev:
 	@echo "Starting frontend dev server on http://localhost:5173..."
-	@echo "Starting backend server on http://localhost:8080..."
+	@echo "Starting backend server on http://localhost:8081..."
 	@(cd . && npm run dev) & (cd . && go run main.go)
 
 # Clean build artifacts
@@ -30,7 +30,7 @@ clean:
 
 # Test backend
 test:
-	go test ./backend/pkg/...
+	go test -race ./backend/pkg/...
 
 # Run with hot reload (requires air: go install github.com/cosmtrek/air@latest)
 dev-backend:
